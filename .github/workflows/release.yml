@@ -1,0 +1,72 @@
+name: Release VPM package
+
+on:
+  push:
+    tags: ['[0-9]*.[0-9]*.[0-9]*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Validate and build without publishing
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test Apps Script
+        run: node --test docs/SheetBoard/tests/appsscript.test.cjs
+      - name: Build and validate release artifacts
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            python Tools/build_release.py --tag "$GITHUB_REF_NAME"
+          elif [[ "$DRY_RUN" == true ]]; then
+            python Tools/build_release.py
+          else
+            echo 'Publishing requires a version tag matching package.json.' >&2
+            exit 1
+          fi
+      - name: Save build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sheet-board-release
+          path: dist/*
+          if-no-files-found: error
+      - name: Publish release
+        if: ${{ github.event_name == 'push' || !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo 'Release already exists; refusing to replace immutable version assets.' >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag --target "$GITHUB_SHA" --title "Sheet Board $GITHUB_REF_NAME" \
+            --notes-file docs/RELEASE_NOTES.md
+      - name: Trigger VPM listing rebuild
+        if: ${{ github.event_name == 'push' || !inputs.dry_run }}
+        env:
+          VPM_REPOS_TOKEN: ${{ secrets.VPM_REPOS_TOKEN }}
+        run: |
+          if [[ -n "$VPM_REPOS_TOKEN" ]]; then
+            GH_TOKEN="$VPM_REPOS_TOKEN" gh workflow run build-listing.yml --repo TenteEEEE/vpm-repos --ref main
+          else
+            echo 'Rebuild TenteEEEE/vpm-repos → Build Repo Listing after publishing.' >> "$GITHUB_STEP_SUMMARY"
+          fi

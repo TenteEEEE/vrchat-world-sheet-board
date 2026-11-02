@@ -1,0 +1,18 @@
+{
+    "name": "SheetBoard.Editor.Dev",
+    "rootNamespace": "SheetBoardDevEditor",
+    "references": [
+        "SheetBoard.Editor",
+        "SheetBoard.Runtime",
+        "Unity.TextMeshPro",
+        "UnityEngine.UI",
+        "UdonSharp.Editor",
+        "UdonSharp.Runtime",
+        "VRC.Udon",
+        "VRC.Udon.Editor",
+        "VRC.SDK3",
+        "VRC.SDKBase",
+        "VRC.Udon.Serialization.OdinSerializer"
+    ],
+    "includePlatforms": ["Editor"]
+}

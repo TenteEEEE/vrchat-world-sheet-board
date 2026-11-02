@@ -1,0 +1,28 @@
+/Library/
+/Temp/
+/Obj/
+/Logs/
+/UserSettings/
+/MemoryCaptures/
+/dist/
+/.vs/
+/.vsconfig
+*.csproj
+*.sln
+*.user
+*.unitypackage
+__pycache__/
+/Packages/SheetBoard~/
+/SheetBoard-original~/
+/ProjectSettings/*
+!/ProjectSettings/ProjectVersion.txt
+!/ProjectSettings/ProjectSettings.asset
+/Assets/TextMesh Pro/
+/Assets/TextMesh Pro.meta
+/Assets/SerializedUdonPrograms/
+/Assets/SerializedUdonPrograms.meta
+/Assets/UdonSharp/
+/Assets/UdonSharp.meta
+/Assets/*
+!/Assets/SheetBoardDev/
+!/Assets/SheetBoardDev.meta
