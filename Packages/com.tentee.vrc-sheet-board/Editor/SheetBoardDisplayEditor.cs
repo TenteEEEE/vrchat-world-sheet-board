@@ -4,45 +4,143 @@ using SheetBoard;
 using UdonSharpEditor;
 using UnityEditor;
 using UnityEngine;
-using UnityEngine.SceneManagement;
 
 namespace SheetBoardEditor
 {
     [CustomEditor(typeof(SheetBoardDisplay))]
     public class SheetBoardDisplayEditor : Editor
     {
+        private bool showLayout;
+        private bool showColors;
+        private bool showTexts;
+        private bool showAdvanced;
+        private bool showInternal;
+        private SheetBoardSource[] sourceCandidates = Array.Empty<SheetBoardSource>();
+
+        private void OnEnable()
+        {
+            EditorApplication.hierarchyChanged += RefreshSourceCandidates;
+            RefreshSourceCandidates();
+        }
+
+        private void OnDisable()
+        {
+            EditorApplication.hierarchyChanged -= RefreshSourceCandidates;
+        }
+
+        private void RefreshSourceCandidates()
+        {
+            sourceCandidates = UnityEngine.Object.FindObjectsByType<SheetBoardSource>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        }
+
         public override void OnInspectorGUI()
         {
             if (UdonSharpGUI.DrawDefaultUdonSharpBehaviourHeader(target)) return;
             serializedObject.Update();
-            SerializedProperty iterator = serializedObject.GetIterator();
-            bool children = true;
-            while (iterator.NextVisible(children))
-            {
-                children = false;
-                if (iterator.name == "rangeName") { DrawRange(iterator); continue; }
-                if (iterator.name == "textScale") { EditorGUILayout.Slider(iterator, 0.5f, 3f, Label(iterator.name)); continue; }
-                using (new EditorGUI.DisabledScope(iterator.name == "m_Script")) EditorGUILayout.PropertyField(iterator, Label(iterator.name), true);
-            }
-            serializedObject.ApplyModifiedProperties();
             SheetBoardDisplay display = (SheetBoardDisplay)target;
+            EditorGUILayout.LabelField("基本設定", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(serializedObject.FindProperty("source"), Label("source"));
+            DrawRange(serializedObject.FindProperty("rangeName"));
             if (display.source == null)
             {
                 SheetBoardSource only = null;
                 int count = 0;
-                foreach (SheetBoardSource source in UnityEngine.Object.FindObjectsByType<SheetBoardSource>(FindObjectsInactive.Include, FindObjectsSortMode.None))
-                    if (source.gameObject.scene == display.gameObject.scene) { only = source; count++; }
-                if (count == 1 && GUILayout.Button("自動で設定"))
+                foreach (SheetBoardSource source in sourceCandidates)
                 {
-                    if (!SheetBoardInstaller.CheckProgramsCompiled()) return;
-                    Undo.RecordObject(display, "Assign Sheet Board Source");
-                    display.source = only;
-                    UdonSharpEditorUtility.CopyProxyToUdon(display);
-                    EditorUtility.SetDirty(display);
-                    if (PrefabUtility.IsPartOfPrefabInstance(display)) PrefabUtility.RecordPrefabInstancePropertyModifications(display);
+                    if (source.gameObject.scene != display.gameObject.scene) continue;
+                    only = source;
+                    count++;
                 }
-                if (count > 1) EditorGUILayout.HelpBox("Source が複数あります。データ元を手動で指定してください。", MessageType.Info);
+                if (count == 1 && GUILayout.Button("同じシーンの Source を自動設定"))
+                {
+                    serializedObject.ApplyModifiedProperties();
+                    EditorApplication.delayCall += () => AssignSource(display, only);
+                    GUIUtility.ExitGUI();
+                }
+                if (count > 1)
+                    EditorGUILayout.HelpBox("Source が複数あります。自動選択しないため、上の欄で指定してください。", MessageType.Info);
+                if (count == 0)
+                    EditorGUILayout.HelpBox("Source が未設定です。Source を作成するか、上の欄で指定してください。", MessageType.Info);
             }
+            else if (GUILayout.Button("Source Inspector を開く")) Selection.activeObject = display.source;
+            EditorGUILayout.HelpBox("範囲名が空欄の場合、Source の先頭の範囲を表示します。", MessageType.None);
+            serializedObject.ApplyModifiedProperties();
+            showLayout = EditorGUILayout.Foldout(showLayout, "表示とレイアウト（任意）", true);
+            if (showLayout)
+            {
+                Draw("lightTheme");
+                Draw("textScale");
+                Draw("maxRows");
+                Draw("maxCols");
+                Draw("showTitle");
+                Draw("showGrid");
+                Draw("zebra");
+                Draw("maxRowHeight");
+                using (new EditorGUI.DisabledScope(serializedObject.FindProperty("showGrid").boolValue))
+                    Draw("columnGap");
+            }
+            showColors = EditorGUILayout.Foldout(showColors, "色（任意）", true);
+            if (showColors)
+            {
+                Draw("boardColor");
+                Draw("bodyColor");
+                Draw("gridColor");
+                Draw("headerBackgroundColor");
+                using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("zebra").boolValue))
+                    Draw("zebraColor");
+                Draw("normalColor");
+                Draw("staleColor");
+                Draw("errorColor");
+                Draw("busyColor");
+            }
+            showTexts = EditorGUILayout.Foldout(showTexts, "文言（任意）", true);
+            if (showTexts)
+            {
+                Draw("rangeMissingText");
+                Draw("sourceMissingText");
+                Draw("refreshIdleText");
+                Draw("refreshBusyText");
+            }
+            showAdvanced = EditorGUILayout.Foldout(showAdvanced, "詳細設定", true);
+            if (showAdvanced)
+            {
+                using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("showGrid").boolValue)) Draw("gridWidth");
+                Draw("maxOverlays");
+                Draw("nearCheckInterval");
+            }
+            showInternal = EditorGUILayout.Foldout(showInternal, "内部参照（通常は変更不要）", true);
+            if (showInternal)
+            {
+                EditorGUILayout.HelpBox("通常の編集では変更不要です。", MessageType.Info);
+                Draw("background");
+                Draw("titleText");
+                Draw("statusText");
+                Draw("tableArea");
+                Draw("columnTemplate");
+                Draw("cellTemplate");
+                Draw("overlayTemplate");
+                Draw("overlayNoWrapTemplate");
+                Draw("statusDot");
+                Draw("refreshButton");
+                Draw("refreshLabel");
+            }
+            serializedObject.ApplyModifiedProperties();
+        }
+        private static void AssignSource(SheetBoardDisplay display, SheetBoardSource source)
+        {
+            if (!SheetBoardInstaller.CheckProgramsCompiled()) return;
+            SheetBoardInstaller.RecordProxyUndo(display, "Assign Sheet Board Source");
+            display.source = source;
+            UdonSharpEditorUtility.CopyProxyToUdon(display);
+            EditorUtility.SetDirty(display);
+            if (PrefabUtility.IsPartOfPrefabInstance(display)) PrefabUtility.RecordPrefabInstancePropertyModifications(display);
+        }
+        private void Draw(string name)
+        {
+            SerializedProperty property = serializedObject.FindProperty(name);
+            if (property == null) return;
+            if (name == "textScale") EditorGUILayout.Slider(property, 0.5f, 3f, Label(name));
+            else EditorGUILayout.PropertyField(property, Label(name), true);
         }
         private void DrawRange(SerializedProperty property)
         {
@@ -60,7 +158,17 @@ namespace SheetBoardEditor
                 if (selected > 0) property.stringValue = ranges[selected - 1];
             }
             EditorGUILayout.EndHorizontal();
-            if (string.IsNullOrEmpty(property.stringValue)) EditorGUILayout.LabelField("（空欄 = 最初の範囲）", EditorStyles.miniLabel);
+            if (ranges.Length > 0)
+            {
+                EditorGUILayout.BeginHorizontal();
+                GUILayout.FlexibleSpace();
+                int selectedIndex = Array.IndexOf(ranges, property.stringValue);
+                string rangeStatus = string.IsNullOrEmpty(property.stringValue)
+                    ? "（空欄 = 最初の範囲）"
+                    : selectedIndex < 0 ? "未確認の範囲名" : "確認済みの範囲名";
+                EditorGUILayout.LabelField(rangeStatus, EditorStyles.miniLabel, GUILayout.Width(150));
+                EditorGUILayout.EndHorizontal();
+            }
         }
         private static GUIContent Label(string name)
         {
@@ -90,14 +198,19 @@ namespace SheetBoardEditor
                 case "columnTemplate": return new GUIContent("列テンプレート");
                 case "cellTemplate": return new GUIContent("セル背景テンプレート");
                 case "statusDot": return new GUIContent("状態ランプ");
+                case "refreshButton": return new GUIContent("更新ボタン");
+                case "refreshLabel": return new GUIContent("更新ボタンの文字");
+                case "refreshIdleText": return new GUIContent("更新ボタンの文言");
+                case "refreshBusyText": return new GUIContent("更新中のボタンの文言");
+                case "rangeMissingText": return new GUIContent("範囲が見つからないとき");
+                case "sourceMissingText": return new GUIContent("Source がないとき");
                 case "bodyColor": return new GUIContent("本文の色");
                 case "headerBackgroundColor": return new GUIContent("見出し背景の色");
                 case "zebraColor": return new GUIContent("交互の行背景色");
                 case "normalColor": return new GUIContent("正常の色");
                 case "staleColor": return new GUIContent("古い状態の色");
                 case "errorColor": return new GUIContent("エラーの色");
-                case "rangeMissingText": return new GUIContent("範囲がない場合の文言");
-                case "sourceMissingText": return new GUIContent("データ元がない場合の文言");
+                case "busyColor": return new GUIContent("更新中のランプ色");
                 default: return new GUIContent(name);
             }
         }

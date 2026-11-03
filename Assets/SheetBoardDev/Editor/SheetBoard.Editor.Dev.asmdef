@@ -1,6 +1,6 @@
 {
     "name": "SheetBoard.Editor.Dev",
-    "rootNamespace": "SheetBoardDevEditor",
+    "rootNamespace": "SheetBoardDev",
     "references": [
         "SheetBoard.Editor",
         "SheetBoard.Runtime",

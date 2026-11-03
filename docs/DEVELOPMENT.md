@@ -6,9 +6,9 @@ Open the project with Unity 2022.3.22f1 after restoring VRChat Worlds SDK 3.10.5
 
 Before tagging a version, run these Unity batch entry points in order:
 
-1. `SheetBoardDevEditor.SheetBoardDevMenu.BuildPrefabsBatch` when prefab generation is needed.
-2. `SheetBoardDevEditor.SheetBoardReleaseValidation.VerifyBatch` to test timestamp bounds, CDN rollback, in-flight status, prefab wiring, installation, and render seven sample images. Inspect `Logs/SheetBoardPreview*.png`.
-3. `SheetBoardDevEditor.SheetBoardDevMenu.ExportUnityPackageBatch` to clear the dynamic font before saving distribution assets. The package contains its two serialized Udon programs under `Runtime/SerializedPrograms`.
+1. `SheetBoardDev.SheetBoardBatchBuild.RebuildAndPreview` to compile UdonSharp, regenerate prefabs, validate permissions and render samples.
+2. `SheetBoardDevEditor.SheetBoardReleaseValidation.VerifyBatch` to test timestamp bounds, CDN rollback, in-flight status, prefab wiring, installation, and render eight sample images. Inspect `Logs/SheetBoardPreview*.png`.
+3. `SheetBoardDev.SheetBoardDevMenu.ExportUnityPackageBatch` to clear the dynamic font before saving distribution assets. The package contains its two serialized Udon programs under `Runtime/SerializedPrograms`.
 
 Run `node --test docs/SheetBoard/tests/appsscript.test.cjs` and `python Tools/build_release.py` from the repository root. Python validates the package metadata, preserved GUIDs, bundled Udon programs and empty font data, then builds deterministic ZIP and UnityPackage archives in `dist/`.
 

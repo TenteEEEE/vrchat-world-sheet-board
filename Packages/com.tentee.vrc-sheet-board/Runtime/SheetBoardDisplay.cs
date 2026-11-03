@@ -4,7 +4,6 @@ using UnityEngine.UI;
 using TMPro;
 using VRC.SDK3.Data;
 using VRC.SDKBase;
-using VRC.Udon;
 
 namespace SheetBoard
 {
@@ -27,10 +26,12 @@ namespace SheetBoard
         public float textScale = 1.4f;
         public float columnGap = 12f;
         [Header("Colours")]
-        public Color boardColor, bodyColor, gridColor, headerBackgroundColor, zebraColor, normalColor, staleColor, errorColor;
+        public Color boardColor, bodyColor, gridColor, headerBackgroundColor, zebraColor, normalColor, staleColor, errorColor, busyColor;
         [Header("Texts")]
         public string rangeMissingText = "範囲「{name}」が見つかりません";
         public string sourceMissingText = "Sourceが設定されていません";
+        public string refreshIdleText = "更新";
+        public string refreshBusyText = "更新中…";
 
         [Header("Internal references (installer-wired)")]
         public Image background;
@@ -38,11 +39,20 @@ namespace SheetBoard
         public RectTransform tableArea;
         public TMP_Text columnTemplate, overlayTemplate, overlayNoWrapTemplate;
         public Image cellTemplate, statusDot;
+        public Button refreshButton;
+        public TMP_Text refreshLabel;
 
         private const float MinInterval = 0.25f, MaxInterval = 1.5f, Padding = 6f, DefaultTextScale = 1.4f;
+        private const int MaxCellChars = 200;
+        private const float MinFontFactor = 0.6f, MaxFontFactor = 1.6f;
+        private const int MinMeasuredColumnWidth = 2, MaxMeasuredColumnWidth = 40;
+        private const float FitFontWidthFactor = 0.55f, DefaultCellHeightFactor = 0.62f, VerticalOffsetFactor = 0.78f;
+        private const int MaxFontSizeKinds = 16;
+        private const float DefaultBodyRed = 0x20 / 255f, DefaultBodyGreen = 0x21 / 255f, DefaultBodyBlue = 0x24 / 255f;
         private float nextWatchAt;
         private bool watchStarted;
         private bool warnedTemplates;
+        private bool busyLampOn;
         private SheetBoardSource displayedSource;
         private bool colorsReady;
         private RectTransform[] frames;
@@ -57,23 +67,47 @@ namespace SheetBoard
         private int overlayCount;
         private int overlayNoWrapCount;
         private int displayedRevision = -1;
+        private RectTransform[] columnTextRects;
+        private RectTransform[] overlayTextRects;
+        private RectTransform[] overlayNoWrapTextRects;
+        private float workBasePt;
+        private float[] workXs, workWs, workYs, workHs;
+        private float workHeightAll, workBasePx;
+        private int workRows, workCols;
+        private bool workHeader;
+        private string workBodyHex;
+        private DataList workMerges;
+        private string[] workRaw;
+        private int[] workAscii, workOther, workBits, workAlignment, workSpanRows, workSpanCols, workLongest;
+        private float[] workPt;
+        private Color[] workFg, workBg;
+        private bool[] workHasFg, workHasBg, workWrapping, workCovered, workOverlayUsed;
+        private bool overlayPoolUnavailable;
+        private bool overlayNoWrapPoolUnavailable;
 
         private void InitColors()
         {
             if (colorsReady) return;
             colorsReady = true;
             if (boardColor.a <= 0f) boardColor = lightTheme ? Color.white : new Color(0x12 / 255f, 0x16 / 255f, 0x1C / 255f, 1f);
-            if (bodyColor.a <= 0f) bodyColor = lightTheme ? new Color(0x20 / 255f, 0x21 / 255f, 0x24 / 255f, 1f) : new Color(0xE8 / 255f, 0xED / 255f, 0xF2 / 255f, 1f);
+            if (bodyColor.a <= 0f) bodyColor = lightTheme ? new Color(DefaultBodyRed, DefaultBodyGreen, DefaultBodyBlue, 1f) : new Color(0xE8 / 255f, 0xED / 255f, 0xF2 / 255f, 1f);
             if (gridColor.a <= 0f) gridColor = lightTheme ? new Color(0xE2 / 255f, 0xE3 / 255f, 0xE3 / 255f, 1f) : new Color(1f, 1f, 1f, 0.08f);
             if (headerBackgroundColor.a <= 0f) headerBackgroundColor = new Color(0x2E / 255f, 0xD3 / 255f, 0xC6 / 255f, 0.18f);
             if (zebraColor.a <= 0f) zebraColor = lightTheme ? new Color(0f, 0f, 0f, 0.025f) : new Color(1f, 1f, 1f, 0.015f);
             if (normalColor.a <= 0f) normalColor = new Color(0x4C / 255f, 0xAF / 255f, 0x50 / 255f, 1f);
             if (staleColor.a <= 0f) staleColor = new Color(1f, 0xB3 / 255f, 0f, 1f);
             if (errorColor.a <= 0f) errorColor = new Color(0xE5 / 255f, 0x39 / 255f, 0x35 / 255f, 1f);
+            if (busyColor.a <= 0f) busyColor = new Color32(0x21, 0x96, 0xF3, 0xFF);
         }
 
         private void OnEnable()
         {
+            if (refreshButton == null) refreshButton = GetComponentInChildren<Button>();
+            if (refreshLabel == null && refreshButton != null) refreshLabel = refreshButton.GetComponentInChildren<TMP_Text>();
+            int access = source == null ? 2 : source.GetAccessStatus();
+            bool busy = source != null && access == 0 && source.IsBusy();
+            UpdateRefreshButton(access, busy);
+            if (source != null && access != 0) RenderNow();
             float interval = Mathf.Clamp(nearCheckInterval, MinInterval, MaxInterval);
             float now = Time.realtimeSinceStartup;
             if (watchStarted && now <= nextWatchAt + 2f * interval) return;
@@ -90,13 +124,9 @@ namespace SheetBoard
             if (now < nextWatchAt - 0.5f * interval) return;
             nextWatchAt = now + interval;
             SendCustomEventDelayedSeconds(nameof(_Watch), interval);
-            InitColors();
-            if (source == null) { SetStatus(sourceMissingText, errorColor); return; }
-            VRCPlayerApi player = Networking.LocalPlayer;
-            if (source.nearRadius > 0f && Utilities.IsValid(player) && Vector3.Distance(player.GetPosition(), transform.position) <= source.nearRadius) source._ReportNear(interval);
-            if (displayedSource != source || displayedRevision != source.GetRevision()) RenderNow();
-            int level = source.GetStatusLevel();
-            SetStatus(source.GetStatusText(), level == 0 ? normalColor : (level == 1 ? staleColor : errorColor));
+            int access = source == null ? 2 : source.GetAccessStatus();
+            bool busy = source != null && access == 0 && source.IsBusy();
+            RefreshIndicators(access, busy);
         }
 
         private void SetStatus(string value, Color color)
@@ -105,7 +135,52 @@ namespace SheetBoard
             if (statusDot != null) statusDot.color = color;
         }
 
-        public void OnRefreshPressed() { if (source != null) source.RequestRefresh(); }
+        public void OnRefreshPressed()
+        {
+            int access = source == null ? 2 : source.GetAccessStatus();
+            if (source != null && access == 0) source.RequestRefresh();
+            bool busy = source != null && access == 0 && source.IsBusy();
+            RefreshIndicators(access, busy);
+        }
+
+        private void RefreshIndicators(int access, bool busy)
+        {
+            InitColors();
+            if (source == null) SetStatus(sourceMissingText, errorColor);
+            else if (access != 0)
+            {
+                if (displayedSource != source || displayedRevision != source.GetRevision()) RenderNow();
+                SetStatus(access == 2 ? source.permissionDeniedText : source.permissionWaitingText, errorColor);
+            }
+            else
+            {
+                VRCPlayerApi player = Networking.LocalPlayer;
+                float interval = Mathf.Clamp(nearCheckInterval, MinInterval, MaxInterval);
+                if (source.nearRadius > 0f && Utilities.IsValid(player) && Vector3.Distance(player.GetPosition(), transform.position) <= source.nearRadius) source._ReportNear(interval);
+                if (displayedSource != source || displayedRevision != source.GetRevision()) RenderNow();
+                int level = source.GetStatusLevel();
+                SetStatus(source.GetStatusText(), level == 0 ? normalColor : (level == 1 ? staleColor : errorColor));
+            }
+            if (busy)
+            {
+                busyLampOn = !busyLampOn;
+                Color color = busyColor;
+                color.a = busyLampOn ? 1f : 0.35f;
+                if (statusDot != null) statusDot.color = color;
+            }
+            else busyLampOn = false;
+            UpdateRefreshButton(access, busy);
+        }
+
+        private void UpdateRefreshButton(int access, bool busy)
+        {
+            if (refreshButton != null) refreshButton.interactable = source != null && access == 0 && source.GetRefreshWaitSeconds() == 0f;
+            if (refreshLabel != null)
+            {
+                string label = busy ? refreshBusyText : refreshIdleText;
+                if (refreshLabel.text != label) refreshLabel.text = label;
+            }
+        }
 
         private void InitPools()
         {
@@ -117,11 +192,14 @@ namespace SheetBoard
             if (frames != null || tableArea == null || columnTemplate == null || cellTemplate == null) return;
             frames = new RectTransform[Mathf.Max(0, maxCols)];
             columns = new TMP_Text[frames.Length];
+            columnTextRects = new RectTransform[frames.Length];
             cells = new Image[Mathf.Max(0, maxRows) * frames.Length];
             overlayFrames = new RectTransform[Mathf.Max(0, maxOverlays)];
             overlays = new TMP_Text[overlayFrames.Length];
+            overlayTextRects = new RectTransform[overlayFrames.Length];
             overlayNoWrapFrames = new RectTransform[Mathf.Max(0, maxOverlays)];
             overlaysNoWrap = new TMP_Text[overlayNoWrapFrames.Length];
+            overlayNoWrapTextRects = new RectTransform[overlayNoWrapFrames.Length];
             GameObject underlay = Instantiate(cellTemplate.gameObject, tableArea);
             grid = underlay.GetComponent<Image>();
             underlay.transform.SetAsFirstSibling();
@@ -131,7 +209,15 @@ namespace SheetBoard
                 GameObject frame = Instantiate(columnTemplate.GetComponent<RectTransform>().parent.gameObject, tableArea);
                 frames[i] = (RectTransform)frame.transform;
                 columns[i] = frame.GetComponentInChildren<TMP_Text>(true);
-                if (columns[i] != null) columns[i].GetComponent<RectTransform>().gameObject.SetActive(true);
+                if (columns[i] != null)
+                {
+                    columnTextRects[i] = columns[i].GetComponent<RectTransform>();
+                    columnTextRects[i].anchorMin = Vector2.zero;
+                    columnTextRects[i].anchorMax = Vector2.one;
+                    columnTextRects[i].offsetMin = new Vector2(Padding, 0f);
+                    columnTextRects[i].offsetMax = new Vector2(-Padding, 0f);
+                    columnTextRects[i].gameObject.SetActive(true);
+                }
                 frame.SetActive(false);
             }
         }
@@ -149,34 +235,29 @@ namespace SheetBoard
             return cells[cellCount++];
         }
 
-        private TMP_Text GetOverlay()
+        private int GetOverlayIndex(RectTransform[] poolFrames, TMP_Text[] poolTexts, RectTransform[] poolTextRects, TMP_Text template, int count, bool noWrap)
         {
-            if (overlayTemplate == null || overlayCount >= overlays.Length) return null;
-            if (overlays[overlayCount] == null)
+            if (template == null || (noWrap ? overlayNoWrapPoolUnavailable : overlayPoolUnavailable) || count >= poolTexts.Length) return -1;
+            if (poolTexts[count] == null)
             {
-                GameObject obj = Instantiate(overlayTemplate.GetComponent<RectTransform>().parent.gameObject, tableArea);
-                overlayFrames[overlayCount] = (RectTransform)obj.transform;
-                overlays[overlayCount] = obj.GetComponentInChildren<TMP_Text>(true);
-                if (overlays[overlayCount] != null) overlays[overlayCount].GetComponent<RectTransform>().gameObject.SetActive(true);
+                GameObject obj = Instantiate(template.GetComponent<RectTransform>().parent.gameObject, tableArea);
+                poolFrames[count] = (RectTransform)obj.transform;
+                poolTexts[count] = obj.GetComponentInChildren<TMP_Text>(true);
+                if (poolTexts[count] == null)
+                {
+                    Destroy(obj);
+                    if (noWrap) overlayNoWrapPoolUnavailable = true;
+                    else overlayPoolUnavailable = true;
+                    return -1;
+                }
+                poolTextRects[count] = poolTexts[count].GetComponent<RectTransform>();
+                poolTextRects[count].anchorMin = Vector2.zero;
+                poolTextRects[count].anchorMax = Vector2.one;
+                poolTextRects[count].offsetMin = Vector2.zero;
+                poolTextRects[count].offsetMax = Vector2.zero;
+                poolTextRects[count].gameObject.SetActive(true);
             }
-            TMP_Text result = overlays[overlayCount];
-            if (result != null) overlayCount++;
-            return result;
-        }
-
-        private TMP_Text GetNoWrapOverlay()
-        {
-            if (overlayNoWrapTemplate == null || overlayNoWrapCount >= overlaysNoWrap.Length) return null;
-            if (overlaysNoWrap[overlayNoWrapCount] == null)
-            {
-                GameObject obj = Instantiate(overlayNoWrapTemplate.GetComponent<RectTransform>().parent.gameObject, tableArea);
-                overlayNoWrapFrames[overlayNoWrapCount] = (RectTransform)obj.transform;
-                overlaysNoWrap[overlayNoWrapCount] = obj.GetComponentInChildren<TMP_Text>(true);
-                if (overlaysNoWrap[overlayNoWrapCount] != null) overlaysNoWrap[overlayNoWrapCount].GetComponent<RectTransform>().gameObject.SetActive(true);
-            }
-            TMP_Text result = overlaysNoWrap[overlayNoWrapCount];
-            if (result != null) overlayNoWrapCount++;
-            return result;
+            return count;
         }
 
         private void Place(RectTransform rect, float x, float y, float width, float height)
@@ -260,11 +341,17 @@ namespace SheetBoard
         {
             if (keepLines) value = value.Replace("\r\n", "\n").Replace("\r", "\n");
             else value = value.Replace("\r\n", " ").Replace("\n", " ").Replace("\r", " ");
-            if (value.Length > 200) value = value.Substring(0, 200) + "…";
+            if (value.Length > MaxCellChars)
+            {
+                int length = MaxCellChars;
+                char last = value[length - 1];
+                if (last >= 0xD800 && last <= 0xDBFF) length--;
+                value = value.Substring(0, length) + "…";
+            }
             return value.Replace("<", "<\u200B");
         }
 
-        private string Styled(string raw, int bits, float pt, Color fg, bool hasFg, Color bg, bool hasBg, float basePt, bool header, bool keepLines)
+        private string Styled(string raw, int bits, float pt, Color fg, bool hasFg, Color bg, bool hasBg, float basePt, bool header, bool keepLines, string bodyHex)
         {
             string text = Clean(raw, keepLines);
             if ((bits & 1) != 0 || header) text = "<b>" + text + "</b>";
@@ -273,7 +360,7 @@ namespace SheetBoard
             if ((bits & 8) != 0) text = "<s>" + text + "</s>";
             if (pt > 0f && basePt > 0f)
             {
-                int percent = Mathf.RoundToInt(Mathf.Clamp(pt / basePt, 0.6f, 1.6f) * 100f);
+                int percent = Mathf.RoundToInt(FontFactor(pt, basePt) * 100f);
                 if (percent != 100) text = "<size=" + percent.ToString() + "%>" + text + "</size>";
             }
             Color chosen = bodyColor;
@@ -282,8 +369,14 @@ namespace SheetBoard
                 chosen = fg;
                 if (!hasBg && ((!lightTheme && Luminance(chosen) < 0.25f) || (lightTheme && Luminance(chosen) > 0.85f))) chosen = bodyColor;
             }
-            else if (hasBg) chosen = Luminance(bg) >= 0.5f ? new Color(0x20 / 255f, 0x21 / 255f, 0x24 / 255f, 1f) : Color.white;
-            return "<color=" + Hex(chosen) + ">" + text + "</color>";
+            else if (hasBg) chosen = Luminance(bg) >= 0.5f ? new Color(DefaultBodyRed, DefaultBodyGreen, DefaultBodyBlue, 1f) : Color.white;
+            string colorHex = chosen.r == bodyColor.r && chosen.g == bodyColor.g && chosen.b == bodyColor.b ? bodyHex : Hex(chosen);
+            return "<color=" + colorHex + ">" + text + "</color>";
+        }
+
+        private float FontFactor(float pt, float basePt)
+        {
+            return Mathf.Clamp(pt / basePt, MinFontFactor, MaxFontFactor);
         }
 
         private Color OpaqueOverBoard(Color color)
@@ -295,19 +388,22 @@ namespace SheetBoard
         {
             displayedSource = null; displayedRevision = -1;
             InitColors();
+            workBodyHex = Hex(bodyColor);
             if (background != null) background.color = boardColor;
             if (titleText != null) titleText.color = bodyColor;
             if (statusText != null) statusText.color = bodyColor;
             InitPools();
             if (frames == null) return;
             for (int i = 0; i < frames.Length; i++) frames[i].gameObject.SetActive(false);
+            for (int i = 0; i < columns.Length; i++) if (columns[i] != null) columns[i].text = "";
             for (int i = 0; i < cellCount; i++) if (cells[i] != null) cells[i].gameObject.SetActive(false);
-            for (int i = 0; i < overlayCount; i++) if (overlayFrames[i] != null) overlayFrames[i].gameObject.SetActive(false);
-            for (int i = 0; i < overlayNoWrapCount; i++) if (overlayNoWrapFrames[i] != null) overlayNoWrapFrames[i].gameObject.SetActive(false);
+            for (int i = 0; i < overlays.Length; i++) { if (overlays[i] != null) overlays[i].text = ""; if (overlayFrames[i] != null) overlayFrames[i].gameObject.SetActive(false); }
+            for (int i = 0; i < overlaysNoWrap.Length; i++) { if (overlaysNoWrap[i] != null) overlaysNoWrap[i].text = ""; if (overlayNoWrapFrames[i] != null) overlayNoWrapFrames[i].gameObject.SetActive(false); }
+            if (titleText != null) titleText.text = "";
             cellCount = 0; overlayCount = 0; overlayNoWrapCount = 0; grid.gameObject.SetActive(false);
             if (source == null) return;
             if (tableArea.rect.width <= 0f || tableArea.rect.height <= 0f || textScale <= 0f || maxRowHeight <= 0f) return;
-            if (!source.HasData()) { if (titleText != null) titleText.text = ""; displayedSource = source; displayedRevision = source.GetRevision(); return; }
+            if (!source.HasData()) { displayedSource = source; displayedRevision = source.GetRevision(); return; }
             string name = string.IsNullOrEmpty(rangeName) ? source.GetFirstRangeName() : rangeName;
             DataDictionary range = source.GetRange(name);
             if (range == null) { if (titleText != null) titleText.text = rangeMissingText.Replace("{name}", name); displayedSource = source; displayedRevision = source.GetRevision(); return; }
@@ -323,115 +419,288 @@ namespace SheetBoard
             for (int r = 0; r < nr; r++) if (rows[r].TokenType == TokenType.DataList) nc = Mathf.Max(nc, rows[r].DataList.Count);
             nc = Mathf.Min(nc, Mathf.Min(frames.Length, Mathf.Max(0, maxCols)));
             if (nr == 0 || nc == 0) { displayedSource = source; displayedRevision = source.GetRevision(); return; }
-            int n = nr * nc;
-            string[] raw = new string[n]; int[] ascii = new int[n], other = new int[n], bits = new int[n], alignment = new int[n];
-            float[] pt = new float[n]; Color[] fg = new Color[n], bg = new Color[n];
-            bool[] hasFg = new bool[n], hasBg = new bool[n], wrapping = new bool[n], covered = new bool[n], overlayUsed = new bool[n];
-            int[] spanRows = new int[n], spanCols = new int[n], longest = new int[nc];
-            float[] points = new float[16]; int[] counts = new int[16]; int distinct = 0;
-            for (int r = 0; r < nr; r++) for (int c = 0; c < nc; c++)
+            workRows = nr;
+            workCols = nc;
+            workRaw = new string[nr * nc];
+            workAscii = new int[nr * nc];
+            workOther = new int[nr * nc];
+            workBits = new int[nr * nc];
+            workAlignment = new int[nr * nc];
+            workPt = new float[nr * nc];
+            workFg = new Color[nr * nc];
+            workBg = new Color[nr * nc];
+            workHasFg = new bool[nr * nc];
+            workHasBg = new bool[nr * nc];
+            workWrapping = new bool[nr * nc];
+            workCovered = new bool[nr * nc];
+            workOverlayUsed = new bool[nr * nc];
+            workSpanRows = new int[nr * nc];
+            workSpanCols = new int[nr * nc];
+            workLongest = new int[nc];
+            workHeader = header;
+            CollectCellData(rows, sizes, align, ha, bold, styles, colors, backgrounds, wrap);
+            CalculateLayout(widths, colw, rowh, sizes);
+            workMerges = merges;
+            ApplyMerges();
+            DrawCellsAndOverlays();
+            DrawColumns();
+            displayedSource = source; displayedRevision = source.GetRevision();
+        }
+
+        private void CollectCellData(DataList rows, DataList sizes, DataList align, DataList ha, DataList bold, DataList styles, DataList colors, DataList backgrounds, DataList wrap)
+        {
+            float[] points = new float[MaxFontSizeKinds];
+            int[] counts = new int[MaxFontSizeKinds];
+            int distinct = 0;
+            for (int r = 0; r < workRows; r++)
             {
-                int i = r * nc + c; raw[i] = Value(Cell(rows, r, c));
-                for (int j = 0; j < raw[i].Length; j++) { if (raw[i][j] <= 127) ascii[i]++; else other[i]++; }
-                longest[c] = Mathf.Max(longest[c], ascii[i] + 2 * other[i]);
-                pt[i] = (float)Number(Cell(sizes, r, c));
-                if (pt[i] > 0f) { int j = 0; while (j < distinct && points[j] != pt[i]) j++; if (j < 16) { if (j == distinct) points[distinct++] = pt[i]; counts[j]++; } }
-                bits[i] = styles != null ? (int)Number(Cell(styles, r, c)) : (Number(Cell(bold, r, c)) == 1d ? 1 : 0);
-                string f = Value(Cell(colors, r, c)), b = Value(Cell(backgrounds, r, c));
-                hasFg[i] = ValidColor(f); hasBg[i] = ValidColor(b);
-                if (hasFg[i]) fg[i] = ParseColor(f); if (hasBg[i]) bg[i] = ParseColor(b);
-                string a = Value(Cell(ha, r, c)); if (a != "l" && a != "c" && a != "r") a = align != null && c < align.Count ? Value(align[c]) : "l";
-                alignment[i] = a == "c" ? 1 : (a == "r" ? 2 : 0);
-                wrapping[i] = Number(Cell(wrap, r, c)) == 1d;
+                for (int c = 0; c < workCols; c++)
+                {
+                    int i = r * workCols + c;
+                    workRaw[i] = Value(Cell(rows, r, c));
+                    int scanLength = Mathf.Min(workRaw[i].Length, MaxCellChars + 1);
+                    for (int j = 0; j < scanLength; j++)
+                    {
+                        if (workRaw[i][j] <= 127) workAscii[i]++;
+                        else workOther[i]++;
+                    }
+                    workLongest[c] = Mathf.Max(workLongest[c], workAscii[i] + 2 * workOther[i]);
+                    workPt[i] = (float)Number(Cell(sizes, r, c));
+                    if (workPt[i] > 0f)
+                    {
+                        int j = 0;
+                        while (j < distinct && points[j] != workPt[i]) j++;
+                        if (j < MaxFontSizeKinds)
+                        {
+                            if (j == distinct) points[distinct++] = workPt[i];
+                            counts[j]++;
+                        }
+                    }
+                    workBits[i] = styles != null ? (int)Number(Cell(styles, r, c)) : (Number(Cell(bold, r, c)) == 1d ? 1 : 0);
+                    string f = Value(Cell(colors, r, c));
+                    string b = Value(Cell(backgrounds, r, c));
+                    workHasFg[i] = ValidColor(f);
+                    workHasBg[i] = ValidColor(b);
+                    if (workHasFg[i]) workFg[i] = ParseColor(f);
+                    if (workHasBg[i]) workBg[i] = ParseColor(b);
+                    string a = Value(Cell(ha, r, c));
+                    if (a != "l" && a != "c" && a != "r") a = align != null && c < align.Count ? Value(align[c]) : "l";
+                    workAlignment[i] = a == "c" ? 1 : (a == "r" ? 2 : 0);
+                    workWrapping[i] = Number(Cell(wrap, r, c)) == 1d;
+                }
             }
-            float basePt = 0f; int best = 0;
-            for (int i = 0; i < distinct; i++) if (counts[i] > best) { best = counts[i]; basePt = points[i]; }
-            float[] xs = new float[nc], ws = new float[nc], ys = new float[nr], hs = new float[nr];
-            float[] sorted = new float[Mathf.Max(nr, nc)]; int valid = 0;
-            DataList weightList = widths != null ? widths : colw; bool useColw = widths == null && colw != null;
-            for (int c = 0; c < nc; c++) { float v = weightList == null ? Mathf.Clamp(longest[c], 2, 40) : (c < weightList.Count ? (float)Number(weightList[c]) : 0f); ws[c] = v; if (v > 0f) sorted[valid++] = v; }
-            float fallback = Median(sorted, valid, useColw ? 100f : 1f), total = 0f;
-            for (int c = 0; c < nc; c++) { if (ws[c] <= 0f) ws[c] = fallback; total += ws[c]; }
+            int best = 0;
+            workBasePt = 0f;
+            for (int i = 0; i < distinct; i++)
+            {
+                if (counts[i] > best)
+                {
+                    best = counts[i];
+                    workBasePt = points[i];
+                }
+            }
+        }
+
+        private void CalculateLayout(DataList widths, DataList colw, DataList rowh, DataList sizes)
+        {
+            workXs = new float[workCols];
+            workWs = new float[workCols];
+            workYs = new float[workRows];
+            workHs = new float[workRows];
+            float[] sorted = new float[Mathf.Max(workRows, workCols)];
+            int valid = 0;
+            DataList weightList = widths != null ? widths : colw;
+            bool useColw = widths == null && colw != null;
+            for (int c = 0; c < workCols; c++)
+            {
+                float v = weightList == null ? Mathf.Clamp(workLongest[c], MinMeasuredColumnWidth, MaxMeasuredColumnWidth) : (c < weightList.Count ? (float)Number(weightList[c]) : 0f);
+                workWs[c] = v;
+                if (v > 0f) sorted[valid++] = v;
+            }
+            float fallback = Median(sorted, valid, useColw ? 100f : 1f);
+            float total = 0f;
+            for (int c = 0; c < workCols; c++)
+            {
+                if (workWs[c] <= 0f) workWs[c] = fallback;
+                total += workWs[c];
+            }
             float gap = showGrid || useColw ? 0f : columnGap;
-            float available = Mathf.Max(0f, tableArea.rect.width - gap * (nc - 1)), cumulative = 0f;
-            for (int c = 0; c < nc; c++) { float start = Mathf.Round(cumulative + c * gap); cumulative += available * ws[c] / total; float end = Mathf.Round(cumulative + c * gap); xs[c] = start; ws[c] = end - start; }
+            float available = Mathf.Max(0f, tableArea.rect.width - gap * (workCols - 1));
+            float cumulative = 0f;
+            for (int c = 0; c < workCols; c++)
+            {
+                float start = Mathf.Round(cumulative + c * gap);
+                cumulative += available * workWs[c] / total;
+                float end = Mathf.Round(cumulative + c * gap);
+                workXs[c] = start;
+                workWs[c] = end - start;
+            }
             valid = 0;
-            for (int r = 0; r < nr; r++) { float v = rowh == null ? 1f : (r < rowh.Count ? (float)Number(rowh[r]) : 0f); hs[r] = v; if (v > 0f) sorted[valid++] = v; }
-            fallback = Median(sorted, valid, rowh == null ? 1f : 21f); total = 0f;
-            for (int r = 0; r < nr; r++) { if (hs[r] <= 0f) hs[r] = fallback; sorted[r] = hs[r]; total += hs[r]; }
-            float median = Median(sorted, nr, fallback), scale = Mathf.Min(tableArea.rect.height / total, maxRowHeight / median);
+            for (int r = 0; r < workRows; r++)
+            {
+                float v = rowh == null ? 1f : (r < rowh.Count ? (float)Number(rowh[r]) : 0f);
+                workHs[r] = v;
+                if (v > 0f) sorted[valid++] = v;
+            }
+            fallback = Median(sorted, valid, rowh == null ? 1f : 21f);
+            total = 0f;
+            for (int r = 0; r < workRows; r++)
+            {
+                if (workHs[r] <= 0f) workHs[r] = fallback;
+                sorted[r] = workHs[r];
+                total += workHs[r];
+            }
+            float median = Median(sorted, workRows, fallback);
+            float scale = Mathf.Min(tableArea.rect.height / total, maxRowHeight / median);
             cumulative = 0f;
-            for (int r = 0; r < nr; r++) { ys[r] = Mathf.Round(cumulative); cumulative += hs[r] * scale; hs[r] = Mathf.Round(cumulative) - ys[r]; sorted[r] = hs[r]; }
-            float heightAll = Mathf.Round(cumulative), medianHeight = Median(sorted, nr, 0f);
-            float basePx = sizes != null && rowh != null && basePt > 0f ? basePt * (4f / 3f) * scale * Mathf.Clamp(textScale, 0.5f, 3f) : medianHeight * 0.62f * Mathf.Clamp(textScale, 0.5f, 3f) / DefaultTextScale;
-            if (merges != null) for (int i = 0; i < merges.Count; i++)
+            for (int r = 0; r < workRows; r++)
             {
-                if (merges[i].TokenType != TokenType.DataList || merges[i].DataList.Count < 4) continue;
-                DataList m = merges[i].DataList; int r = (int)Number(m[0]), c = (int)Number(m[1]), rh = (int)Number(m[2]), cw = (int)Number(m[3]);
-                if (r < 0 || c < 0 || r >= nr || c >= nc || rh < 1 || cw < 1) continue;
-                rh = Mathf.Min(rh, nr - r); cw = Mathf.Min(cw, nc - c); if (rh == 1 && cw == 1) continue;
+                workYs[r] = Mathf.Round(cumulative);
+                cumulative += workHs[r] * scale;
+                workHs[r] = Mathf.Round(cumulative) - workYs[r];
+                sorted[r] = workHs[r];
+            }
+            workHeightAll = Mathf.Round(cumulative);
+            float medianHeight = Median(sorted, workRows, 0f);
+            workBasePx = sizes != null && rowh != null && workBasePt > 0f ? workBasePt * (4f / 3f) * scale * Mathf.Clamp(textScale, 0.5f, 3f) : medianHeight * DefaultCellHeightFactor * Mathf.Clamp(textScale, 0.5f, 3f) / DefaultTextScale;
+        }
+
+        private void ApplyMerges()
+        {
+            if (workMerges != null) for (int i = 0; i < workMerges.Count; i++)
+            {
+                if (workMerges[i].TokenType != TokenType.DataList || workMerges[i].DataList.Count < 4) continue;
+                DataList m = workMerges[i].DataList;
+                int r = (int)Number(m[0]);
+                int c = (int)Number(m[1]);
+                int rh = (int)Number(m[2]);
+                int cw = (int)Number(m[3]);
+                if (r < 0 || c < 0 || r >= workRows || c >= workCols || rh < 1 || cw < 1) continue;
+                rh = Mathf.Min(rh, workRows - r);
+                cw = Mathf.Min(cw, workCols - c);
+                if (rh == 1 && cw == 1) continue;
                 bool overlaps = false;
-                for (int rr = r; rr < r + rh; rr++) for (int cc = c; cc < c + cw; cc++) if (covered[rr * nc + cc] || spanRows[rr * nc + cc] > 0) overlaps = true;
+                for (int rr = r; rr < r + rh; rr++)
+                {
+                    for (int cc = c; cc < c + cw; cc++)
+                    {
+                        if (workCovered[rr * workCols + cc] || workSpanRows[rr * workCols + cc] > 0) overlaps = true;
+                    }
+                }
                 if (overlaps) continue;
-                spanRows[r * nc + c] = rh; spanCols[r * nc + c] = cw;
-                for (int rr = r; rr < r + rh; rr++) for (int cc = c; cc < c + cw; cc++) if (rr != r || cc != c) covered[rr * nc + cc] = true;
-            }
-            if (showGrid) { grid.color = gridColor; Place((RectTransform)grid.transform, 0f, 0f, tableArea.rect.width, heightAll); grid.gameObject.SetActive(true); }
-            for (int r = 0; r < nr; r++) for (int c = 0; c < nc; c++)
-            {
-                int i = r * nc + c; if (covered[i]) continue;
-                int rh = Mathf.Max(1, spanRows[i]), cw = Mathf.Max(1, spanCols[i]);
-                float width = xs[c + cw - 1] + ws[c + cw - 1] - xs[c], height = ys[r + rh - 1] + hs[r + rh - 1] - ys[r];
-                bool isHeader = header && r == 0, isZebra = zebra && !isHeader && r % 2 == 1;
-                if (hasBg[i] || isHeader || isZebra || showGrid)
+                workSpanRows[r * workCols + c] = rh;
+                workSpanCols[r * workCols + c] = cw;
+                for (int rr = r; rr < r + rh; rr++)
                 {
-                    Image rect = GetCellRect();
-                    if (rect != null) { Color fill = hasBg[i] ? bg[i] : (isHeader ? headerBackgroundColor : (isZebra ? zebraColor : boardColor)); if (showGrid && !hasBg[i] && (isHeader || isZebra)) fill = OpaqueOverBoard(fill); rect.color = fill; float inset = showGrid ? Mathf.Max(0f, gridWidth) : 0f; Place((RectTransform)rect.transform, xs[c] + inset, ys[r] + inset, width - inset * 2f, height - inset * 2f); rect.gameObject.SetActive(true); }
-                }
-                int kind = spanRows[i] > 0 ? 1 : (wrapping[i] || raw[i].Contains("\n") || raw[i].Contains("\r") ? 2 : 0);
-                if (kind == 0 && alignment[i] == 0 && raw[i].Length > 0)
-                {
-                    float font = basePx * (pt[i] > 0f && basePt > 0f ? Mathf.Clamp(pt[i] / basePt, 0.6f, 1.6f) : 1f);
-                    if (ascii[i] * font * 0.55f + other[i] * font > ws[c] - 2f * Padding)
+                    for (int cc = c; cc < c + cw; cc++)
                     {
-                        int end = c + 1;
-                        while (end < nc && raw[r * nc + end] == "" && !hasBg[r * nc + end] && !covered[r * nc + end] && spanRows[r * nc + end] == 0) end++;
-                        if (end > c + 1) { kind = 3; width = xs[end - 1] + ws[end - 1] - xs[c]; }
-                    }
-                }
-                if (kind != 0)
-                {
-                    bool noWrap = kind == 3 || (kind == 1 && !wrapping[i]); TMP_Text overlay = noWrap ? GetNoWrapOverlay() : GetOverlay();
-                    if (overlay != null)
-                    {
-                        RectTransform frame = noWrap ? overlayNoWrapFrames[overlayNoWrapCount - 1] : overlayFrames[overlayCount - 1];
-                        Place(frame, xs[c] + Padding, ys[r], width - 2f * Padding, height);
-                        RectTransform tr = overlay.GetComponent<RectTransform>(); tr.anchorMin = Vector2.zero; tr.anchorMax = Vector2.one; tr.offsetMin = Vector2.zero; tr.offsetMax = Vector2.zero;
-                        overlay.color = bodyColor; overlay.fontSize = basePx; overlay.alignment = alignment[i] == 1 ? TextAlignmentOptions.Center : (alignment[i] == 2 ? TextAlignmentOptions.Right : TextAlignmentOptions.Left);
-                        overlay.text = Styled(raw[i], bits[i], pt[i], fg[i], hasFg[i], bg[i], hasBg[i], basePt, isHeader, true); frame.gameObject.SetActive(true); overlayUsed[i] = true;
+                        if (rr != r || cc != c) workCovered[rr * workCols + cc] = true;
                     }
                 }
             }
-            bool sameHeight = true; for (int r = 1; r < nr; r++) if (hs[r] != hs[0]) sameHeight = false;
-            for (int c = 0; c < nc; c++)
+        }
+
+        private void DrawCellsAndOverlays()
+        {
+            if (showGrid)
             {
-                Place(frames[c], xs[c], 0f, ws[c], heightAll); TMP_Text column = columns[c]; if (column == null) continue;
-                RectTransform tr = column.GetComponent<RectTransform>(); tr.anchorMin = Vector2.zero; tr.anchorMax = Vector2.one; tr.offsetMin = new Vector2(Padding, 0f); tr.offsetMax = new Vector2(-Padding, 0f);
-                column.color = bodyColor; column.fontSize = basePx; column.alignment = TextAlignmentOptions.TopLeft; string content = "";
-                for (int r = 0; r < nr; r++)
+                grid.color = gridColor;
+                Place((RectTransform)grid.transform, 0f, 0f, tableArea.rect.width, workHeightAll);
+                grid.gameObject.SetActive(true);
+            }
+            for (int r = 0; r < workRows; r++)
+            {
+                for (int c = 0; c < workCols; c++)
                 {
-                    int i = r * nc + c; if (r > 0) content += "\n";
-                    if (!sameHeight || r == 0) content += "<line-height=" + ((int)hs[r]).ToString() + ">";
-                    content += "<align=" + (alignment[i] == 1 ? "center" : (alignment[i] == 2 ? "right" : "left")) + ">";
-                    float font = basePx * (pt[i] > 0f && basePt > 0f ? Mathf.Clamp(pt[i] / basePt, 0.6f, 1.6f) : 1f);
-                    float offset = hs[r] * 0.5f - 0.78f * font; bool shifted = Mathf.Abs(offset) >= 1f;
+                    int i = r * workCols + c;
+                    if (workCovered[i]) continue;
+                    int rh = Mathf.Max(1, workSpanRows[i]);
+                    int cw = Mathf.Max(1, workSpanCols[i]);
+                    float width = workXs[c + cw - 1] + workWs[c + cw - 1] - workXs[c];
+                    float height = workYs[r + rh - 1] + workHs[r + rh - 1] - workYs[r];
+                    bool isHeader = workHeader && r == 0;
+                    bool isZebra = zebra && !isHeader && r % 2 == 1;
+                    if (workHasBg[i] || isHeader || isZebra || showGrid)
+                    {
+                        Image rect = GetCellRect();
+                        if (rect != null)
+                        {
+                            Color fill = workHasBg[i] ? workBg[i] : (isHeader ? headerBackgroundColor : (isZebra ? zebraColor : boardColor));
+                            if (showGrid && !workHasBg[i] && (isHeader || isZebra)) fill = OpaqueOverBoard(fill);
+                            rect.color = fill;
+                            float inset = showGrid ? Mathf.Max(0f, gridWidth) : 0f;
+                            Place((RectTransform)rect.transform, workXs[c] + inset, workYs[r] + inset, width - inset * 2f, height - inset * 2f);
+                            rect.gameObject.SetActive(true);
+                        }
+                    }
+                    int kind = workSpanRows[i] > 0 ? 1 : (workWrapping[i] || workRaw[i].Contains("\n") || workRaw[i].Contains("\r") ? 2 : 0);
+                    if (kind == 0 && workAlignment[i] == 0 && workRaw[i].Length > 0)
+                    {
+                        float font = workBasePx * (workPt[i] > 0f && workBasePt > 0f ? FontFactor(workPt[i], workBasePt) : 1f);
+                        if (workAscii[i] * font * FitFontWidthFactor + workOther[i] * font > workWs[c] - 2f * Padding)
+                        {
+                            int end = c + 1;
+                            while (end < workCols && workRaw[r * workCols + end] == "" && !workHasBg[r * workCols + end] && !workCovered[r * workCols + end] && workSpanRows[r * workCols + end] == 0) end++;
+                            if (end > c + 1)
+                            {
+                                kind = 3;
+                                width = workXs[end - 1] + workWs[end - 1] - workXs[c];
+                            }
+                        }
+                    }
+                    if (kind == 0) continue;
+                    bool noWrap = kind == 3 || (kind == 1 && !workWrapping[i]);
+                    int overlayIndex = noWrap
+                        ? GetOverlayIndex(overlayNoWrapFrames, overlaysNoWrap, overlayNoWrapTextRects, overlayNoWrapTemplate, overlayNoWrapCount, true)
+                        : GetOverlayIndex(overlayFrames, overlays, overlayTextRects, overlayTemplate, overlayCount, false);
+                    if (overlayIndex < 0) continue;
+                    TMP_Text overlay = noWrap ? overlaysNoWrap[overlayIndex] : overlays[overlayIndex];
+                    RectTransform frame = noWrap ? overlayNoWrapFrames[overlayIndex] : overlayFrames[overlayIndex];
+                    if (noWrap) overlayNoWrapCount++;
+                    else overlayCount++;
+                    Place(frame, workXs[c] + Padding, workYs[r], width - 2f * Padding, height);
+                    overlay.color = bodyColor;
+                    overlay.fontSize = workBasePx;
+                    overlay.alignment = workAlignment[i] == 1 ? TextAlignmentOptions.Center : (workAlignment[i] == 2 ? TextAlignmentOptions.Right : TextAlignmentOptions.Left);
+                    overlay.text = Styled(workRaw[i], workBits[i], workPt[i], workFg[i], workHasFg[i], workBg[i], workHasBg[i], workBasePt, isHeader, true, workBodyHex);
+                    frame.gameObject.SetActive(true);
+                    workOverlayUsed[i] = true;
+                }
+            }
+        }
+
+        private void DrawColumns()
+        {
+            bool sameHeight = true;
+            for (int r = 1; r < workRows; r++)
+            {
+                if (workHs[r] != workHs[0]) sameHeight = false;
+            }
+            for (int c = 0; c < workCols; c++)
+            {
+                Place(frames[c], workXs[c], 0f, workWs[c], workHeightAll);
+                TMP_Text column = columns[c];
+                if (column == null) continue;
+                column.color = bodyColor;
+                column.fontSize = workBasePx;
+                column.alignment = TextAlignmentOptions.TopLeft;
+                string content = "";
+                for (int r = 0; r < workRows; r++)
+                {
+                    int i = r * workCols + c;
+                    if (r > 0) content += "\n";
+                    if (!sameHeight || r == 0) content += "<line-height=" + ((int)workHs[r]).ToString() + ">";
+                    content += "<align=" + (workAlignment[i] == 1 ? "center" : (workAlignment[i] == 2 ? "right" : "left")) + ">";
+                    float font = workBasePx * (workPt[i] > 0f && workBasePt > 0f ? FontFactor(workPt[i], workBasePt) : 1f);
+                    float offset = workHs[r] * 0.5f - VerticalOffsetFactor * font;
+                    bool shifted = Mathf.Abs(offset) >= 1f;
                     if (shifted) content += "<voffset=" + Mathf.RoundToInt(-offset).ToString() + ">";
-                    if (!covered[i] && !overlayUsed[i]) content += Styled(raw[i], bits[i], pt[i], fg[i], hasFg[i], bg[i], hasBg[i], basePt, header && r == 0, false);
+                    if (!workCovered[i] && !workOverlayUsed[i]) content += Styled(workRaw[i], workBits[i], workPt[i], workFg[i], workHasFg[i], workBg[i], workHasBg[i], workBasePt, workHeader && r == 0, false, workBodyHex);
                     if (shifted) content += "</voffset>";
                 }
-                column.text = content; frames[c].gameObject.SetActive(true);
+                column.text = content;
+                frames[c].gameObject.SetActive(true);
             }
-            displayedSource = source; displayedRevision = source.GetRevision();
         }
     }
 }

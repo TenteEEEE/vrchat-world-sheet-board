@@ -5,10 +5,12 @@ using System.Text.RegularExpressions;
 using SheetBoard;
 using UdonSharpEditor;
 using UnityEditor;
+using UnityEditor.PackageManager;
 using UnityEngine;
 using UnityEngine.Networking;
 using VRC.SDK3.Data;
 using VRC.SDKBase;
+using VRC.Udon;
 
 namespace SheetBoardEditor
 {
@@ -23,39 +25,163 @@ namespace SheetBoardEditor
             internal MessageType type = MessageType.Info;
             internal string[] ranges = Array.Empty<string>();
         }
-        private const string UserAgentVersion = "0.1.0";
+        private const string FallbackUserAgentVersion = "0.1.0";
         private static readonly Dictionary<int, Result> Results = new Dictionary<int, Result>();
         private static readonly string[] DefaultHosts = { "*.github.io", "pastebin.com", "gist.githubusercontent.com" };
+        private bool showUpdate;
+        private bool showPermission;
+        private bool showTexts;
+        private UdonBehaviour[] controllerCandidates = Array.Empty<UdonBehaviour>();
+
+        private void OnEnable()
+        {
+            EditorApplication.hierarchyChanged += RefreshControllerCandidates;
+            RefreshControllerCandidates();
+        }
+
+        private void OnDisable()
+        {
+            EditorApplication.hierarchyChanged -= RefreshControllerCandidates;
+        }
+
+        private void RefreshControllerCandidates()
+        {
+            controllerCandidates = UnityEngine.Object.FindObjectsByType<UdonBehaviour>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        }
         internal static string[] GetRanges(SheetBoardSource source)
         {
-            if (source != null && Results.TryGetValue(source.GetInstanceID(), out Result result) && result.url == NormalizedUrl(source.baseUrl)) return result.ranges;
+            if (source != null && Results.TryGetValue(source.GetInstanceID(), out Result result) &&
+                result.url == NormalizedUrl(source.baseUrl) && result.type != MessageType.Error)
+                return result.ranges;
             return Array.Empty<string>();
         }
         public override void OnInspectorGUI()
         {
             if (UdonSharpGUI.DrawDefaultUdonSharpBehaviourHeader(target)) return;
             serializedObject.Update();
-            SerializedProperty iterator = serializedObject.GetIterator();
-            bool children = true;
-            while (iterator.NextVisible(children))
-            {
-                children = false;
-                if (iterator.name == "urls") continue;
-                using (new EditorGUI.DisabledScope(iterator.name == "m_Script"))
-                    EditorGUILayout.PropertyField(iterator, Label(iterator.name), true);
-            }
-            serializedObject.ApplyModifiedProperties();
             SheetBoardSource source = (SheetBoardSource)target;
-            if (!UrlsMatch(source)) EditorGUILayout.HelpBox("URL が未適用か、生成済み URL と一致しません。", MessageType.Warning);
-            if (GUILayout.Button("URL を適用")) ApplyUrls(source);
-            using (new EditorGUI.DisabledScope(Results.TryGetValue(source.GetInstanceID(), out Result current) && current.pending))
-                if (GUILayout.Button("接続を確認")) StartCheck(source);
+            EditorGUILayout.LabelField("基本設定", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(
+                serializedObject.FindProperty("baseUrl"), new GUIContent("ベース URL"));
+            serializedObject.ApplyModifiedProperties();
+            serializedObject.Update();
+            EditorGUILayout.HelpBox("通常はURLを貼り付けて適用し、接続を確認するだけで始められます。", MessageType.Info);
+            if (!UrlsMatch(source)) EditorGUILayout.HelpBox("URL は未適用、または生成済み URL と一致しません。", MessageType.Warning);
+            if (GUILayout.Button("URL を適用"))
+            {
+                serializedObject.ApplyModifiedProperties();
+                EditorApplication.delayCall += () => ApplyUrls(source);
+                GUIUtility.ExitGUI();
+            }
+            using (new EditorGUI.DisabledScope(Results.TryGetValue(source.GetInstanceID(), out Result pending) && pending.pending))
+                if (GUILayout.Button("接続を確認"))
+                {
+                    serializedObject.ApplyModifiedProperties();
+                    EditorApplication.delayCall += () => StartCheck(source);
+                    GUIUtility.ExitGUI();
+                }
             if (Results.TryGetValue(source.GetInstanceID(), out Result result))
             {
-                if (result.url != NormalizedUrl(source.baseUrl)) EditorGUILayout.HelpBox("URL が変更されました。接続を再確認してください。", MessageType.Warning);
+                if (result.url != NormalizedUrl(source.baseUrl)) EditorGUILayout.HelpBox("URL が変わりました。接続を再確認してください。", MessageType.Warning);
                 else EditorGUILayout.HelpBox(result.message, result.type);
                 if (result.pending) Repaint();
             }
+            bool isRestricted = source.audience != SheetBoardAudience.Public;
+            GetControllerCandidateSummary(source, out bool assignedValid, out int candidateCount, out UdonBehaviour onlyCandidate);
+            if (isRestricted && !assignedValid)
+                EditorGUILayout.HelpBox(
+                    "現在の制限付き設定に有効な PermissionController がありません。参照を修正するか、閲覧権限を全員に戻してください。",
+                    MessageType.Error);
+            string audienceSummary = AudienceLabel(source.audience);
+            showPermission = EditorGUILayout.Foldout(showPermission, "ワールド内の閲覧権限（現在: " + audienceSummary + "）", true);
+            if (showPermission)
+            {
+                EditorGUILayout.HelpBox(
+                    "このSourceの、ワールド内での読み込みと表示を制限します。制限する場合は、先にPermissionControllerを指定してください。データのURLは、知っていればワールドの外からでも読めます。見せてはいけない情報は、掲示板に出す範囲に入れないでください。",
+                    MessageType.Info);
+                EditorGUILayout.PropertyField(
+                    serializedObject.FindProperty("permissionController"), new GUIContent("PermissionController"));
+                serializedObject.ApplyModifiedProperties();
+                serializedObject.Update();
+                bool valid = assignedValid;
+                if (GUILayout.Button("シーンから自動設定"))
+                {
+                    serializedObject.ApplyModifiedProperties();
+                    if (candidateCount == 1) EditorApplication.delayCall += () => AssignController(source, onlyCandidate);
+                    GUIUtility.ExitGUI();
+                }
+                DrawControllerCandidates(candidateCount);
+                SerializedProperty audienceProperty = serializedObject.FindProperty("audience");
+                string[] labels = { "全員", "管理者・協力者", "管理者のみ" };
+                using (new EditorGUI.DisabledScope(!valid))
+                    audienceProperty.enumValueIndex = EditorGUILayout.Popup(
+                        "閲覧権限", audienceProperty.enumValueIndex, labels);
+                bool restricted = source.audience != SheetBoardAudience.Public;
+                if (restricted && !valid && GUILayout.Button("閲覧権限を全員に戻す"))
+                {
+                    audienceProperty.enumValueIndex = (int)SheetBoardAudience.Public;
+                    serializedObject.ApplyModifiedProperties();
+                    GUIUtility.ExitGUI();
+                }
+            }
+            showUpdate = EditorGUILayout.Foldout(showUpdate, "更新動作（任意）", true);
+            if (showUpdate)
+            {
+                Draw("refreshInterval");
+                Draw("nearRadius");
+                Draw("staleMinutes");
+                Draw("manualCooldown");
+                Draw("startDelayMax");
+            }
+            showTexts = EditorGUILayout.Foldout(showTexts, "状態表示の文言", true);
+            if (showTexts)
+            {
+                EditorGUILayout.HelpBox("{code} = エラー、{s} = 秒、{time} = 更新時刻、{ago} = 経過時間", MessageType.Info);
+                Draw("permissionDeniedText");
+                Draw("permissionWaitingText");
+                Draw("urlMissingText");
+                Draw("loadingText");
+                Draw("waitingNearText");
+                Draw("failedText");
+                Draw("freshText");
+                Draw("staleText");
+                Draw("retryText");
+                Draw("refreshingSuffix");
+                Draw("minutesUnit");
+                Draw("hoursUnit");
+                Draw("daysUnit");
+            }
+            serializedObject.ApplyModifiedProperties();
+        }
+        private void Draw(string name)
+        {
+            SerializedProperty property = serializedObject.FindProperty(name);
+            if (property != null) EditorGUILayout.PropertyField(property, Label(name), true);
+        }
+        private static void AssignController(SheetBoardSource source, UdonBehaviour candidate)
+        {
+            if (!SheetBoardBuildCheck.IsValidController(source, candidate)) return;
+            SheetBoardInstaller.RecordProxyUndo(source, "Assign PermissionController"); source.permissionController = candidate; UdonSharpEditorUtility.CopyProxyToUdon(source); EditorUtility.SetDirty(source);
+            if (PrefabUtility.IsPartOfPrefabInstance(source)) PrefabUtility.RecordPrefabInstancePropertyModifications(source);
+        }
+        private void GetControllerCandidateSummary(SheetBoardSource source, out bool assignedValid, out int count, out UdonBehaviour only)
+        {
+            assignedValid = false;
+            count = 0;
+            only = null;
+            foreach (UdonBehaviour candidate in controllerCandidates)
+            {
+                bool valid = SheetBoardBuildCheck.IsValidController(source, candidate);
+                if (candidate == source.permissionController) assignedValid = valid;
+                if (!valid) continue;
+                count++;
+                only = candidate;
+            }
+        }
+        private static void DrawControllerCandidates(int count)
+        {
+            if (count > 1) EditorGUILayout.HelpBox("対応する候補が複数あります。自動選択しません。Inspector の参照欄から選択してください。", MessageType.Warning);
+            else if (count == 0) EditorGUILayout.HelpBox("このシーンに対応する PermissionController がありません。", MessageType.Info);
         }
         private static GUIContent Label(string name)
         {
@@ -67,23 +193,40 @@ namespace SheetBoardEditor
                 case "staleMinutes": return new GUIContent("古いデータとする時間（分）");
                 case "manualCooldown": return new GUIContent("手動更新の待機時間（秒）");
                 case "startDelayMax": return new GUIContent("初回取得の最大遅延（秒）");
-                case "urlMissingText": return new GUIContent("URL 未設定の文言");
-                case "loadingText": return new GUIContent("読み込み中の文言");
-                case "waitingNearText": return new GUIContent("近接待ちの文言");
-                case "failedText": return new GUIContent("取得失敗の文言");
-                case "freshText": return new GUIContent("更新済みの文言");
-                case "staleText": return new GUIContent("古いデータの文言");
-                case "retryText": return new GUIContent("再試行中の文言");
-                case "minutesUnit": return new GUIContent("単位（分前）");
-                case "hoursUnit": return new GUIContent("単位（時間前）");
-                case "daysUnit": return new GUIContent("単位（日前）");
+                case "refreshingSuffix": return new GUIContent("更新中の表示（末尾に追加）");
+                case "permissionDeniedText": return new GUIContent("閲覧権限なし");
+                case "permissionWaitingText": return new GUIContent("権限確認中");
+                case "urlMissingText": return new GUIContent("URL 未設定");
+                case "loadingText": return new GUIContent("読み込み中");
+                case "waitingNearText": return new GUIContent("近接待ち");
+                case "failedText": return new GUIContent("読み込み失敗");
+                case "freshText": return new GUIContent("最新データ");
+                case "staleText": return new GUIContent("古いデータ");
+                case "retryText": return new GUIContent("再試行中");
+                case "minutesUnit": return new GUIContent("分の単位");
+                case "hoursUnit": return new GUIContent("時間の単位");
+                case "daysUnit": return new GUIContent("日の単位");
                 default: return new GUIContent(name);
+            }
+        }
+        private static string AudienceLabel(SheetBoardAudience audience)
+        {
+            switch (audience)
+            {
+                case SheetBoardAudience.Staff: return "管理者・協力者";
+                case SheetBoardAudience.Admin: return "管理者のみ";
+                default: return "全員";
             }
         }
         private static string NormalizedUrl(string url) { return (url ?? "").Trim(); }
         private static int UrlCount(float interval) { return Mathf.Clamp(Mathf.CeilToInt(300f / Mathf.Max(30f, interval)) + 1, 4, 64); }
         private static string UrlAt(string baseUrl, int index) { return baseUrl + (baseUrl.Contains("?") ? "&v=" : "?v=") + index; }
-        private static bool UrlsMatch(SheetBoardSource source)
+        private static string GetUserAgentVersion()
+        {
+            UnityEditor.PackageManager.PackageInfo package = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(SheetBoardSource).Assembly);
+            return package != null && !string.IsNullOrEmpty(package.version) ? package.version : FallbackUserAgentVersion;
+        }
+        internal static bool UrlsMatch(SheetBoardSource source)
         {
             string baseUrl = NormalizedUrl(source.baseUrl);
             if (baseUrl.Length == 0) return source.urls == null || source.urls.Length == 0;
@@ -95,7 +238,7 @@ namespace SheetBoardEditor
         private static void ApplyUrls(SheetBoardSource source)
         {
             if (!SheetBoardInstaller.CheckProgramsCompiled()) return;
-            Undo.RecordObject(source, "Apply Sheet Board URLs");
+            SheetBoardInstaller.RecordProxyUndo(source, "Apply Sheet Board URLs");
             string baseUrl = NormalizedUrl(source.baseUrl);
             source.baseUrl = baseUrl;
             int count = baseUrl.Length == 0 ? 0 : UrlCount(source.refreshInterval);
@@ -131,7 +274,7 @@ namespace SheetBoardEditor
             }
             private void Send(string url) { request = UnityWebRequest.Get(url); request.redirectLimit = 0; request.timeout = 15;
                 // The VRChat API rejects requests without a User-Agent of its own.
-                request.SetRequestHeader("User-Agent", "SheetBoard-Editor/" + UserAgentVersion + " (https://github.com/TenteEEEE)"); request.SendWebRequest(); }
+                request.SetRequestHeader("User-Agent", "SheetBoard-Editor/" + GetUserAgentVersion() + " (https://github.com/TenteEEEE)"); request.SendWebRequest(); }
             private void Poll()
             {
                 try { PollRequest(); }
@@ -157,7 +300,11 @@ namespace SheetBoardEditor
                 long status = request.responseCode;
                 if (status >= 300 && status < 400) { Finish(notes + "\nこの URL はリダイレクトするので VRChat では読めません\nLocation: " + request.GetResponseHeader("Location"), MessageType.Error); return; }
                 if (status != 200 || request.result != UnityWebRequest.Result.Success) { Finish(notes + "\nHTTP " + status + ": " + request.error, MessageType.Error); return; }
-                if (!TryRanges(request.downloadHandler.text, out string[] ranges)) { Finish(notes + "\n本文は sheetboard/1 の JSON ではありません。", MessageType.Error); return; }
+                if (!TryRanges(request.downloadHandler.text, out string[] ranges))
+                {
+                    Finish(notes + "\n本文は sheetboard/1 のJSONではありません。", MessageType.Error);
+                    return;
+                }
                 result.ranges = ranges;
                 Finish(notes + "\nHTTP 200 / sheetboard/1\n範囲: " + (ranges.Length == 0 ? "（なし）" : string.Join(", ", ranges)), warning ? MessageType.Warning : MessageType.Info);
             }

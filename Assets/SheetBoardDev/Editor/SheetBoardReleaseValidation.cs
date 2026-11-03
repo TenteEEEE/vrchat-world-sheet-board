@@ -41,7 +41,7 @@ namespace SheetBoardDevEditor
                 Status(source);
                 Require(source.GetStatusLevel() == 1 && source.GetStatusText().Contains("止まっています"), "Stale status disappeared during fetch");
                 Debug.Log("[SheetBoard] Release regression OK: timestamp limits, CDN rollback, preserved data, in-flight status.");
-                SheetBoardPreview.RenderSampleBatch();
+                SheetBoardDev.SheetBoardPreview.RenderSampleBatch();
             }
             catch (Exception e)
             {

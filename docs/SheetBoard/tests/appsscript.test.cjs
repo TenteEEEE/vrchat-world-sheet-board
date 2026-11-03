@@ -22,20 +22,27 @@ function properties(initial = {}) {
   };
 }
 
-function harness({user = {token: 'test-token', login: 'admin'}, doc = {}, fetch, locked = false} = {}) {
+function harness({user = {token: 'test-token', login: 'admin'}, doc = {}, fetch, locked = false, userLocked = false, clientId = 'Ov23liVU3bFAK2lWtKPk'} = {}) {
   const users = properties(user), shared = properties(doc);
-  const requests = [], mails = [], triggers = [], dialogs = [], lockWaits = [];
+  const requests = [], mails = [], triggers = [], dialogs = [], lockWaits = [], userLockWaits = [];
   let releases = 0, uuid = 0;
-  const spreadsheet = {getName: () => 'テストシート', getUrl: () => 'https://example.test/sheet', getSpreadsheetTimeZone: () => 'Asia/Tokyo'};
+  let userLockHeld = userLocked;
+  const spreadsheet = {getName: () => 'テストシート', getUrl: () => 'https://example.test/sheet', getSpreadsheetTimeZone: () => 'Asia/Tokyo', getSheetByName: () => null};
   const context = vm.createContext({
     PropertiesService: {getUserProperties: () => users, getDocumentProperties: () => shared},
-    LockService: {getDocumentLock: () => ({tryLock: ms => { lockWaits.push(ms); return !locked; }, releaseLock: () => releases++})},
+    LockService: {
+      getDocumentLock: () => ({tryLock: ms => { lockWaits.push(ms); return !locked; }, releaseLock: () => releases++}),
+      getUserLock: () => ({
+        tryLock: ms => { userLockWaits.push(ms); if (userLockHeld) return false; userLockHeld = true; return true; },
+        releaseLock: () => { userLockHeld = false; releases++; }
+      })
+    },
     Utilities: {
       getUuid: () => 'pending-' + ++uuid,
       DigestAlgorithm: {MD5: 'md5'}, Charset: {UTF_8: 'utf8'},
       computeDigest: (_, text) => Array.from(crypto.createHash('md5').update(text, 'utf8').digest()),
       newBlob: text => ({getBytes: () => Buffer.from(text, 'utf8')}),
-      formatDate: () => '+0900'
+      formatDate: (date, zone, pattern) => { if (pattern === 'Z') return '+0900'; const d = new Date(date); const parts = new Intl.DateTimeFormat('en-CA', {timeZone: zone || 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'}).formatToParts(d).reduce((a, x) => (a[x.type] = x.value, a), {}); return parts.year + '/' + parts.month + '/' + parts.day + ' ' + parts.hour + ':' + parts.minute; }
     },
     SpreadsheetApp: {getActiveSpreadsheet: () => spreadsheet},
     Session: {getEffectiveUser: () => ({getEmail: () => 'admin@example.test'}), getScriptTimeZone: () => 'Asia/Tokyo'},
@@ -53,16 +60,20 @@ function harness({user = {token: 'test-token', login: 'admin'}, doc = {}, fetch,
     UrlFetchApp: {fetch: (url, options) => {
       const request = {url, ...options}; requests.push(request);
       const result = fetch ? fetch(request) : {status: 200, body: {id: 'new-gist', login: 'admin'}};
-      return {getResponseCode: () => result.status, getContentText: () => JSON.stringify(result.body || {}), getAllHeaders: () => result.headers || {}};
+      return {getResponseCode: () => result.status, getContentText: () => result.text === undefined ? JSON.stringify(result.body || {}) : result.text, getAllHeaders: () => result.headers || {}};
     }}
   });
-  vm.runInContext(script, context, {filename: 'SheetBoard.gs'});
-  const originalReadRanges = context.readRanges_;
-  const originalEnsureSettings = context.ensureSettingsSheet_;
-  context.readRanges_ = () => ({ranges: {schedule: {rows: [['予定']]}}, warnings: []});
+  const source = script.replace(/const GITHUB_CLIENT_ID = '[^']*'/, "const GITHUB_CLIENT_ID = '" + clientId + "'");
+  vm.runInContext(source, context, {filename: 'SheetBoard.gs'});
+  context.__readRanges_ = context.readRanges_;
+  context.readRanges_ = () => {
+    const ranges = {schedule: {rows: [['予定']]}};
+    return {ranges, warnings: []};
+  };
   context.ensureSettingsSheet_ = () => {};
   context.showMessage_ = (...args) => dialogs.push(args);
-  return {context, users, shared, requests, mails, triggers, dialogs, lockWaits, spreadsheet, originalReadRanges, originalEnsureSettings, get releases() { return releases; }};
+  context.showHtml_ = (title, html, options) => dialogs.push([title, context.page_(html, options), options]);
+  return {context, users, shared, requests, mails, triggers, dialogs, lockWaits, userLockWaits, get releases() { return releases; }};
 }
 
 test('range references accept quoted, apostrophe-stripped and bare forms', () => {
@@ -73,10 +84,10 @@ test('range references accept quoted, apostrophe-stripped and bare forms', () =>
   assert.equal(c.parseRangeRef(''), null);
 });
 
-test('trim preserves background-only cells and supports legacy arguments', () => {
+test('trim preserves background-only cells without legacy arguments', () => {
   const {context: c} = harness();
   assert.deepEqual(plain(c.trimEmpty([['x', ''], ['', ''], ['', '']], {bg: [['', ''], ['', '#FF0000'], ['', '']]})).values, [['x', ''], ['', '']]);
-  assert.deepEqual(plain(c.trimEmpty([['x', ''], ['', '']], [['bold']], [['#FFF']])), {values: [['x']], weights: [['bold']], colors: [['#FFF']]});
+  assert.deepEqual(plain(c.trimEmpty([['x', ''], ['', '']], {styles: [[1]], bg: [['#FFF']]})), {values: [['x']], layers: {styles: [[1]], bg: [['#FFF']]}});
 });
 
 test('formatting helpers handle colour, alignment, hidden cells and merges', () => {
@@ -98,15 +109,37 @@ test('formatting helpers handle colour, alignment, hidden cells and merges', () 
 
 test('payload keeps style layers, clips data and never emits bold', () => {
   const {context: c} = harness();
-  const result = c.buildRangePayload([['x'.repeat(210), '']], [['bold', 'normal']], [['#000000', '#abc']], {format: true, extra: {styles: [[1, 0]], bg: [['', '#FF0000']], rowh: [21], colw: [100, 200]}});
+  const result = c.buildRangePayload([['x'.repeat(210), '']], [['#000000', '#abc']], {format: true, extra: {styles: [[1, 0]], bg: [['', '#FF0000']], rowh: [21], colw: [100, 200]}});
   assert.equal(result.payload.rows[0][0].length, 200);
   assert.deepEqual(plain(result.payload.style), [[1, 0]]);
   assert.deepEqual(plain(result.payload.color), [['', '#AABBCC']]);
   assert.equal('bold' in result.payload, false);
   assert.equal(result.warnings.length, 1);
-  const clipped = c.buildRangePayload(Array.from({length: 101}, () => Array(21).fill('x')), [], [], {});
+  const clipped = c.buildRangePayload(Array.from({length: 101}, () => Array(21).fill('x')), [], {});
   assert.equal(clipped.payload.rows.length, 100);
   assert.equal(clipped.payload.rows[0].length, 20);
+});
+
+test('payload omits default formatting layers and keeps a layer when one cell differs', () => {
+  const {context: c} = harness();
+  const defaults = c.buildRangePayload([['x', 'y']], [], {format: true, extra: {
+    styles: [[0, 0]], sizes: [[12, 12]], bg: [['', '']], ha: [['l', 'l']], wrap: [[0, 0]]
+  }}).payload;
+  for (const key of ['style', 'bg', 'color', 'ha', 'wrap']) assert.equal(key in defaults, false);
+  assert.deepEqual(plain(defaults.size), [[12, 12]]);
+  const changed = c.buildRangePayload([['x', 'y']], [['', '#00FF00']], {format: true, extra: {
+    styles: [[0, 1]], bg: [['', '#FF0000']], ha: [['l', 'r']], wrap: [[0, 1]]
+  }}).payload;
+  for (const key of ['style', 'bg', 'ha', 'wrap', 'color']) assert.equal(key in changed, true);
+});
+
+test('status arrays truncate entries and fit within the document property limit', () => {
+  const {context: c} = harness();
+  const input = Array(100).fill('x'.repeat(160));
+  input[input.length - 1] = '';
+  const values = c.boundedStatusArray_(input);
+  assert.ok(values.every(value => value.length <= 120));
+  assert.ok(JSON.stringify(plain(values)).length <= 8000);
 });
 
 test('stable hashing input and explicit timezone offsets', () => {
@@ -127,39 +160,10 @@ test('reordering configured ranges changes revision so an unnamed display follow
 test('tokenless callers only queue a publish and never alter errors or mail suppression', () => {
   const h = harness({user: {}, doc: {lastError: 'keep', lastMail_401: '123', gistOwner: 'admin'}});
   assert.equal(h.context.publish_(true, true), false);
-  assert.deepEqual(h.shared.data, {lastError: 'keep', lastMail_401: '123', gistOwner: 'admin', pending: 'pending-1'});
+  assert.deepEqual(h.shared.data, {lastError: 'keep', lastMail_401: '123', gistOwner: 'admin', pending: 'pending-1', lastPublishOutcome: 'no_token'});
   assert.deepEqual(h.lockWaits, [0]);
   assert.equal(h.releases, 1);
   assert.equal(h.requests.length + h.mails.length, 0);
-});
-
-test('staff without GitHub credentials see the shared world URL', () => {
-  const h = harness({user: {}, doc: {worldUrl: 'https://gist.githubusercontent.com/admin/gist/raw/sheetboard.json'}});
-  let html;
-  h.context.showHtml_ = (_, value) => { html = value; };
-  h.context.showStatus();
-  assert.match(html, /https:\/\/gist\.githubusercontent\.com\/admin\/gist\/raw\/sheetboard\.json/);
-  assert.equal(h.requests.length, 0);
-});
-
-test('setup writes a disabled, unquoted sample range', () => {
-  const h = harness();
-  let written;
-  const sheet = {getMaxRows: () => 100, getRange: () => ({setNumberFormat() {}, insertCheckboxes() {}, setValues: value => { written = value; }})};
-  h.spreadsheet.getSheetByName = () => null;
-  h.spreadsheet.getSheets = () => [{getName: () => '公開前の予定'}];
-  h.spreadsheet.insertSheet = () => sheet;
-  h.originalEnsureSettings();
-  assert.equal(written[1][0], '#sample');
-  assert.equal(written[1][1], '公開前の予定!A1:F20');
-});
-
-test('commented sample rows are never read or included in the first publish', () => {
-  const h = harness();
-  h.spreadsheet.getSheetByName = () => ({getLastRow: () => 2, getRange: () => ({getValues: () => [['#sample', 'Secret!A1:F20', '', false, true, '', '']]})});
-  h.spreadsheet.getSheets = () => { throw new Error('A disabled row must not read spreadsheet data'); };
-  const result = h.originalReadRanges();
-  assert.deepEqual(plain(result), {ranges: {}, warnings: []});
 });
 
 test('a busy trigger queues immediately without a request', () => {
@@ -168,14 +172,32 @@ test('a busy trigger queues immediately without a request', () => {
   assert.deepEqual(h.lockWaits, [0]);
   assert.equal(h.shared.data.pending, 'pending-1');
   assert.equal(h.requests.length, 0);
+  assert.equal(h.context.publishFailureMessage_(), 'ほかの公開処理が進行中です。このあと自動で公開されるので、操作は不要です。');
 });
 
 test('non-owners cannot install triggers during setup or reconnect, or update/recreate a missing gist', () => {
   const h = harness({user: {token: 'test-token', login: 'other'}, doc: {gistId: 'old', gistOwner: 'admin', worldUrl: 'keep'}});
-  for (const action of [() => h.context.finishSetup(), () => h.context.ensureTriggers_(), () => h.context.publish_(true)]) assert.throws(action, /公開先を作り直す/);
+  for (const action of [() => h.context.finishSetup(), () => h.context.ensureTriggers_()]) assert.throws(action, /公開先を作り直す/);
+  assert.throws(() => h.context.publish_(true), /公開先を作り直す/);
   assert.equal(h.triggers.length, 0);
   assert.equal(h.requests.length, 0);
   assert.equal(h.shared.data.worldUrl, 'keep');
+});
+
+test('Device Flow hands off an existing destination without installing triggers', () => {
+  const h = harness({doc: {gistId: 'existing', gistOwner: 'admin', worldUrl: 'keep'}, fetch: request => {
+    if (request.url.endsWith('/login/device/code')) return {status: 200, body: {device_code: 'device-code', user_code: 'ABCD-EFGH', verification_uri: 'https://github.com/login/device', interval: 5}};
+    if (request.url.endsWith('/login/oauth/access_token')) return {status: 200, body: {access_token: 'staff-token'}};
+    if (request.url === 'https://api.github.com/user') return {status: 200, body: {login: 'staff'}};
+    return {status: 200, body: {}};
+  }});
+  h.context.beginAuthorization_(true);
+  const result = h.context.pollDeviceToken();
+  assert.deepEqual(plain(result), {status: 'success', handoff: true});
+  assert.equal(h.users.data.token, 'staff-token');
+  assert.equal(h.triggers.length, 0);
+  assert.match(h.dialogs.at(-1)[1], /r\.handoff\?/);
+  assert.match(h.dialogs.at(-1)[1], /連携しました。メニュー「SheetBoard → 管理者用 → 公開先を作り直す」を実行してください。/);
 });
 
 test('gist creation resolves missing login before building the world URL', () => {
@@ -187,6 +209,19 @@ test('gist creation resolves missing login before building the world URL', () =>
   assert.equal(h.shared.data.worldUrl, 'https://gist.githubusercontent.com/admin/new-gist/raw/sheetboard.json');
 });
 
+test('first setup creates a URL even when the only configured range is the sample placeholder', () => {
+  const h = harness();
+  h.context.readRanges_ = () => ({ranges: {}, warnings: []});
+  assert.equal(h.context.publish_(true), true);
+  assert.deepEqual(h.requests.map(r => r.method), ['post']);
+  assert.equal(h.shared.data.worldUrl, 'https://gist.githubusercontent.com/admin/new-gist/raw/sheetboard.json');
+  const gistRequest = JSON.parse(h.requests[0].payload);
+  const document = JSON.parse(gistRequest.files['sheetboard.json'].content);
+  assert.deepEqual(plain(document.ranges), {});
+  assert.deepEqual(plain(document.order), []);
+  assert.equal(document.format, 'sheetboard/1');
+});
+
 test('legacy owner is adopted and successful publish clears failure suppression', () => {
   const h = harness({doc: {gistId: 'old', lastError: 'failed', lastMail_401: '100', pending: 'queued'}});
   assert.equal(h.context.publish_(true), true);
@@ -195,6 +230,48 @@ test('legacy owner is adopted and successful publish clears failure suppression'
   assert.equal(h.shared.data.lastError, '');
   assert.equal(h.shared.data.lastMail_401, undefined);
   assert.equal(h.shared.data.pending, undefined);
+});
+
+test('a failed PATCH leaves the previously published Gist document intact', () => {
+  let remote = {ranges: {old: {rows: [['old']]} }};
+  let attempted;
+  const h = harness({user: {token: 'test-token', login: 'admin'}, doc: {gistId: 'existing', gistOwner: 'admin', worldUrl: 'keep'}, fetch: request => {
+    if (request.url.endsWith('/gists/existing') && request.method === 'patch') {
+      attempted = JSON.parse(request.payload).files['sheetboard.json'].content;
+      return {status: 500, body: {message: 'failed'}};
+    }
+    return {status: 200, body: {}};
+  }});
+  h.context.readRanges_ = () => ({ranges: {new: {rows: [['new']]}}, warnings: [], rowStatus: []});
+  h.context.notifyError_ = () => {};
+  h.context.writeSheetStatus_ = () => {};
+  const original = JSON.stringify(remote);
+  assert.throws(() => h.context.publish_(true), /GitHubへの公開に失敗しました/);
+  assert.notEqual(attempted, original);
+  assert.equal(JSON.stringify(remote), original);
+});
+
+test('old administrator timer stops after handoff without writing shared state or sending mail', () => {
+  const h = harness({user: {token: 'old-token', login: 'old-admin'}, doc: {
+    gistId: 'existing', gistOwner: 'new-admin', worldUrl: 'keep', pending: 'queued', rowStatus: '["keep"]', warnings: '["keep"]',
+    lastError: 'keep', lastPublishStatus: 'failure', lastPublishOutcome: 'failure'
+  }});
+  h.triggers.push({getHandlerFunction: () => 'onTimer'});
+  h.context.readRanges_ = () => { throw new Error('must not read ranges after handoff'); };
+  const before = JSON.stringify(h.shared.data);
+  assert.equal(h.context.publish_(false, true), false);
+  assert.equal(JSON.stringify(h.shared.data), before);
+  assert.equal(h.triggers.length, 0);
+  assert.equal(h.mails.length, 0);
+});
+
+test('old administrator manual publish reports owner instructions without changing shared state', () => {
+  const h = harness({user: {token: 'old-token', login: 'old-admin'}, doc: {gistId: 'existing', gistOwner: 'new-admin', worldUrl: 'keep', lastError: 'keep'}});
+  const before = JSON.stringify(h.shared.data);
+  h.context.publishNow();
+  assert.match(h.dialogs.at(-1)[1], /この公開先は new-admin さんのGitHubにあります/);
+  assert.equal(JSON.stringify(h.shared.data), before);
+  assert.equal(h.mails.length, 0);
 });
 
 test('owner 404 recreates once, preserves URL-change suppression, and mails after expiry', () => {
@@ -243,13 +320,517 @@ test('handoff starts authorization when needed and never changes the destination
   let authorization;
   h.context.beginAuthorization_ = setup => { authorization = setup; };
   h.context.recreateDestination();
-  assert.equal(authorization, false);
+  assert.equal(authorization, undefined);
+  assert.match(h.dialogs.at(-1)[1], /更新されなくなります/);
   assert.deepEqual(h.shared.data, {gistId: 'old', gistOwner: 'admin', worldUrl: 'old-url'});
   assert.equal(h.requests.length + h.triggers.length, 0);
 });
 
 test('handoff installs no triggers when publication fails', () => {
   const h = harness({doc: {gistId: 'old', gistOwner: 'admin'}, fetch: () => ({status: 403})});
-  assert.throws(() => h.context.recreateDestinationConfirmed(), /403/);
+  assert.throws(() => h.context.recreateDestinationConfirmed(), /GitHubで公開する許可がありません/);
   assert.equal(h.triggers.length, 0);
+});
+
+test('Device Flow stores the complete expiring token set without a client secret', () => {
+  const h = harness({user: {token: 'old-token', refreshToken: 'old-refresh', tokenExpiresAt: '1', refreshTokenExpiresAt: '2', reauthRequired: 'true'}, fetch: request => {
+    if (request.url.endsWith('/login/device/code')) return {status: 200, body: {device_code: 'device-secret', user_code: 'ABCD-EFGH', verification_uri: 'https://github.com/login/device', interval: 5}};
+    if (request.url.endsWith('/login/oauth/access_token') && request.payload.device_code) return {status: 200, body: {access_token: 'new-access-secret', refresh_token: 'new-refresh-secret', expires_in: 28800, refresh_token_expires_in: 15552000}};
+    if (request.url === 'https://api.github.com/user') return {status: 200, body: {login: 'admin'}};
+    return {status: 200, body: {}};
+  }});
+  h.context.beginAuthorization_(false);
+  const result = h.context.pollDeviceToken();
+  assert.equal(result.status, 'success');
+  assert.equal(h.users.data.token, 'new-access-secret');
+  assert.equal(h.users.data.refreshToken, 'new-refresh-secret');
+  assert.equal(h.users.data.authType, 'oauth');
+  assert.ok(Number(h.users.data.tokenExpiresAt) > Date.now());
+  assert.ok(Number(h.users.data.refreshTokenExpiresAt) > Number(h.users.data.tokenExpiresAt));
+  assert.equal(h.users.data.deviceCode, undefined);
+  assert.equal(h.users.data.reauthRequired, undefined);
+  const tokenExchange = h.requests.find(request => request.url.endsWith('/login/oauth/access_token'));
+  assert.equal(tokenExchange.payload.grant_type, 'urn:ietf:params:oauth:grant-type:device_code');
+  assert.equal('client_secret' in tokenExchange.payload, false);
+  assert.equal(JSON.stringify(h.dialogs).includes('new-access-secret'), false);
+});
+
+test('refreshes near expiry and persists the rotated tokens before later API calls', () => {
+  const h = harness({user: {token: 'access-a', refreshToken: 'refresh-a', tokenExpiresAt: String(Date.now() + 4 * 60000), refreshTokenExpiresAt: String(Date.now() + 10 * 86400000), login: 'admin'}, fetch: request => {
+    if (request.url.endsWith('/login/oauth/access_token')) {
+      assert.deepEqual(plain(request.payload), {client_id: 'Ov23liVU3bFAK2lWtKPk', grant_type: 'refresh_token', refresh_token: 'refresh-a'});
+      return {status: 200, body: {access_token: 'access-b', refresh_token: 'refresh-b', expires_in: 28800, refresh_token_expires_in: 15552000}};
+    }
+    return {status: 200, body: {id: 'ok'}};
+  }});
+  assert.equal(h.context.refreshAccessToken_(false), 'access-b');
+  assert.equal(h.users.data.token, 'access-b');
+  assert.equal(h.users.data.refreshToken, 'refresh-b');
+  assert.ok(Number(h.users.data.tokenExpiresAt) > Date.now() + 7 * 3600000);
+  assert.ok(Number(h.users.data.refreshTokenExpiresAt) > Number(h.users.data.tokenExpiresAt));
+  assert.equal(h.requests[0].url, 'https://github.com/login/oauth/access_token');
+});
+
+test('the five-minute timer refreshes an unchanged publication before its token expires', () => {
+  const h = harness({user: {token: 'access-a', refreshToken: 'refresh-a', tokenExpiresAt: String(Date.now() + 4 * 60000), refreshTokenExpiresAt: String(Date.now() + 10 * 86400000), login: 'admin'}, fetch: request => {
+    if (request.url.endsWith('/login/oauth/access_token')) return {status: 200, body: {access_token: 'access-b', refresh_token: 'refresh-b', expires_in: 28800, refresh_token_expires_in: 15552000}};
+    throw new Error('Unchanged content should not call GitHub API');
+  }});
+  const ranges = h.context.readRanges_().ranges;
+  const revision = h.context.computeRev_(ranges);
+  h.shared.setProperties({gistId: 'existing', gistOwner: 'admin', lastRev: revision, lastPublishMillis: String(Date.now()), updatedUnix: '123'});
+  h.context.onTimer();
+  assert.equal(h.requests.length, 1);
+  assert.ok(h.requests[0].url.endsWith('/login/oauth/access_token'));
+  assert.equal(h.users.data.token, 'access-b');
+  assert.equal(h.shared.data.updatedUnix, '123');
+});
+
+test('a transient refresh failure queues an unchanged publication for recovery on the next timer', () => {
+  let refreshAttempt = 0;
+  const h = harness({user: {token: 'access-a', refreshToken: 'refresh-a', tokenExpiresAt: String(Date.now() + 60000), refreshTokenExpiresAt: String(Date.now() + 10 * 86400000), login: 'admin'}, doc: {gistId: 'existing', gistOwner: 'admin'}, fetch: request => {
+    if (request.url.endsWith('/login/oauth/access_token')) {
+      refreshAttempt++;
+      if (refreshAttempt === 1) return {status: 503, body: {error: 'temporarily_unavailable'}};
+      return {status: 200, body: {access_token: 'access-b', refresh_token: 'refresh-b', expires_in: 28800, refresh_token_expires_in: 15552000}};
+    }
+    return {status: 200, body: {id: 'existing'}};
+  }});
+  const revision = h.context.computeRev_(h.context.readRanges_().ranges);
+  h.shared.setProperties({lastRev: revision, lastPublishMillis: String(Date.now()), lastError: 'old error', lastPublishStatus: 'failure'});
+  h.context.onTimer();
+  assert.equal(h.shared.data.pending, 'pending-1');
+  assert.match(h.shared.data.lastError, /GitHub連携を更新できませんでした。自動で再試行します。操作は不要です（エラー番号 503）。/);
+  h.context.onTimer();
+  assert.equal(refreshAttempt, 2);
+  assert.equal(h.users.data.token, 'access-b');
+  assert.equal(h.shared.data.pending, undefined);
+  assert.equal(h.shared.data.lastError, '');
+  assert.equal(h.shared.data.lastPublishStatus, 'success');
+});
+
+test('tokens outside the refresh margin do not trigger a refresh', () => {
+  const h = harness({user: {token: 'access-a', refreshToken: 'refresh-a', tokenExpiresAt: String(Date.now() + 6 * 60000), refreshTokenExpiresAt: String(Date.now() + 10 * 86400000)}});
+  assert.equal(h.context.refreshAccessToken_(false), 'access-a');
+  assert.equal(h.requests.length, 0);
+});
+
+test('simultaneous timer-style executions reuse the first rotated token', () => {
+  let refreshCalls = 0;
+  const h = harness({user: {token: 'access-a', refreshToken: 'refresh-a', tokenExpiresAt: String(Date.now() + 60000), refreshTokenExpiresAt: String(Date.now() + 10 * 86400000)}, fetch: request => {
+    if (request.url.endsWith('/login/oauth/access_token')) {
+      refreshCalls++;
+      return {status: 200, body: {access_token: 'access-b', refresh_token: 'refresh-b', expires_in: 28800, refresh_token_expires_in: 15552000}};
+    }
+    return {status: 200, body: {}};
+  }});
+  assert.equal(h.context.refreshAccessToken_(false), 'access-b');
+  assert.equal(h.context.refreshAccessToken_(false), 'access-b');
+  assert.equal(h.context.refreshAccessToken_(true, 'access-a'), 'access-b');
+  assert.equal(refreshCalls, 1);
+});
+
+test('a GitHub API 401 refreshes and retries the API request no more than once', () => {
+  let apiCalls = 0;
+  const h = harness({user: {token: 'access-a', refreshToken: 'refresh-a', tokenExpiresAt: String(Date.now() + 3600000), refreshTokenExpiresAt: String(Date.now() + 10 * 86400000)}, fetch: request => {
+    if (request.url.endsWith('/login/oauth/access_token')) return {status: 200, body: {access_token: 'access-b', refresh_token: 'refresh-b', expires_in: 28800, refresh_token_expires_in: 15552000}};
+    apiCalls++;
+    return {status: 401, body: {message: 'unauthorized'}};
+  }});
+  assert.throws(() => h.context.githubRequest_('patch', '/gists/example', {files: {} }), /連携をやり直す/);
+  assert.equal(apiCalls, 2);
+  assert.equal(h.users.data.reauthRequired, 'true');
+});
+
+test('a 401 retry uses the newly rotated access token in its Authorization header', () => {
+  const h = harness({user: {token: 'access-a', refreshToken: 'refresh-a', tokenExpiresAt: String(Date.now() + 3600000), refreshTokenExpiresAt: String(Date.now() + 10 * 86400000)}, fetch: request => {
+    if (request.url.endsWith('/login/oauth/access_token')) return {status: 200, body: {access_token: 'access-b', refresh_token: 'refresh-b', expires_in: 28800, refresh_token_expires_in: 15552000}};
+    return {status: request.headers.Authorization === 'Bearer access-a' ? 401 : 200, body: {id: 'ok'}};
+  }});
+  assert.equal(h.context.githubRequest_('patch', '/gists/example', {files: {}}).body.id, 'ok');
+  const api = h.requests.filter(request => request.url === 'https://api.github.com/gists/example');
+  assert.deepEqual(api.map(request => request.headers.Authorization), ['Bearer access-a', 'Bearer access-b']);
+});
+
+test('an expired access token is refreshed before an ordinary API request', () => {
+  const h = harness({user: {token: 'expired-access', refreshToken: 'refresh-a', tokenExpiresAt: String(Date.now() - 1000), refreshTokenExpiresAt: String(Date.now() + 10 * 86400000)}, fetch: request => {
+    if (request.url.endsWith('/login/oauth/access_token')) return {status: 200, body: {access_token: 'fresh-access', refresh_token: 'refresh-b', expires_in: 28800, refresh_token_expires_in: 15552000}};
+    return {status: request.headers.Authorization === 'Bearer fresh-access' ? 200 : 401, body: {id: 'ok'}};
+  }});
+  assert.equal(h.context.githubRequest_('get', '/user').body.id, 'ok');
+  assert.equal(h.requests.filter(request => request.url.endsWith('/login/oauth/access_token')).length, 1);
+  assert.equal(h.requests.filter(request => request.url === 'https://api.github.com/user').length, 1);
+});
+
+test('temporary refresh failures preserve both credentials and can be retried later', () => {
+  const h = harness({user: {token: 'access-a', refreshToken: 'refresh-a', tokenExpiresAt: String(Date.now() + 60000), refreshTokenExpiresAt: String(Date.now() + 10 * 86400000)}, fetch: () => ({status: 503, body: {error: 'temporarily_unavailable'}})});
+  assert.throws(() => h.context.refreshAccessToken_(false), /GitHub連携を更新できませんでした。自動で再試行します。操作は不要です/);
+  assert.equal(h.users.data.token, 'access-a');
+  assert.equal(h.users.data.refreshToken, 'refresh-a');
+  assert.equal(h.users.data.reauthRequired, undefined);
+});
+
+test('network throws, rate limits, permission errors, and invalid JSON preserve refresh credentials', () => {
+  const cases = [
+    {name: 'network exception', fetch: () => { throw new Error('https://secret.invalid/?refresh_token=leak'); }},
+    {name: 'rate limit', fetch: () => ({status: 429, body: {message: 'slow down'}})},
+    {name: 'permission/config error', fetch: () => ({status: 403, body: {error: 'unauthorized_client'}})},
+    {name: 'malformed JSON', fetch: () => ({status: 200, text: '{bad json'})}
+  ];
+  for (const testCase of cases) {
+    const h = harness({user: {token: 'access-a', refreshToken: 'refresh-secret', tokenExpiresAt: String(Date.now() + 60000), refreshTokenExpiresAt: String(Date.now() + 10 * 86400000)}, fetch: testCase.fetch});
+    assert.throws(() => h.context.refreshAccessToken_(false));
+    assert.equal(h.users.data.token, 'access-a', testCase.name);
+    assert.equal(h.users.data.refreshToken, 'refresh-secret', testCase.name);
+    assert.equal(h.users.data.reauthRequired, undefined, testCase.name);
+    assert.equal(h.requests.length, 1, testCase.name);
+    assert.equal(JSON.stringify(h.dialogs).includes('refresh-secret'), false, testCase.name);
+    assert.equal(JSON.stringify(h.mails).includes('refresh-secret'), false, testCase.name);
+  }
+});
+
+test('invalid or expired refresh credentials retain values and require reauthorization', () => {
+  const h = harness({user: {token: 'access-a', refreshToken: 'refresh-a', tokenExpiresAt: String(Date.now() + 60000), refreshTokenExpiresAt: String(Date.now() + 10 * 86400000)}, fetch: () => ({status: 200, body: {error: 'bad_refresh_token'}})});
+  assert.throws(() => h.context.refreshAccessToken_(false), /GitHub連携の期限が切れたため、公開が止まっています/);
+  assert.equal(h.users.data.token, 'access-a');
+  assert.equal(h.users.data.refreshToken, 'refresh-a');
+  assert.equal(h.users.data.reauthRequired, 'true');
+});
+
+test('a busy user lock does not issue a second refresh request or discard credentials', () => {
+  const h = harness({user: {token: 'access-a', refreshToken: 'refresh-a', tokenExpiresAt: String(Date.now() + 60000)}, userLocked: true});
+  assert.throws(() => h.context.refreshAccessToken_(false), /GitHub連携を更新できませんでした。自動で再試行します。操作は不要です/);
+  assert.equal(h.requests.length, 0);
+  assert.equal(h.users.data.token, 'access-a');
+  assert.equal(h.users.data.refreshToken, 'refresh-a');
+});
+
+test('legacy non-expiring tokens remain usable, while PAT reconnection clears OAuth metadata', () => {
+  const h = harness({user: {token: 'old-pat', login: 'admin', refreshToken: 'old-refresh', tokenExpiresAt: '123', refreshTokenExpiresAt: '456', authType: 'oauth', reauthRequired: 'true'}, fetch: request => {
+    if (request.url === 'https://api.github.com/user') return {status: 200, body: {login: 'admin'}, headers: {'X-OAuth-Scopes': 'gist'}};
+    return {status: 200, body: {id: 'ok'}};
+  }});
+  assert.deepEqual(plain(h.context.saveToken('new-pat', true)), {handoff: false});
+  assert.equal(h.users.data.token, 'new-pat');
+  for (const key of ['refreshToken', 'tokenExpiresAt', 'refreshTokenExpiresAt', 'authType', 'reauthRequired', 'deviceCode']) assert.equal(h.users.data[key], undefined);
+  h.requests.length = 0;
+  assert.deepEqual(plain(h.context.githubRequest_('get', '/user')), {status: 200, body: {login: 'admin'}, scopes: 'gist'});
+  assert.deepEqual(plain(h.context.githubRequest_('get', '/user')), {status: 200, body: {login: 'admin'}, scopes: 'gist'});
+  assert.equal(h.requests.some(request => request.url.endsWith('/login/oauth/access_token')), false);
+});
+
+test('failed explicit-token validation preserves the currently saved authorization', () => {
+  const h = harness({user: {token: 'current-access', refreshToken: 'current-refresh', tokenExpiresAt: '123', refreshTokenExpiresAt: '456', authType: 'oauth'}, fetch: () => ({status: 401, body: {message: 'invalid'}})});
+  assert.throws(() => h.context.saveToken('candidate-token', true), /401/);
+  assert.equal(h.users.data.token, 'current-access');
+  assert.equal(h.users.data.refreshToken, 'current-refresh');
+  assert.equal(h.users.data.reauthRequired, undefined);
+});
+
+test('a stale 401 cannot mark a newly connected token as requiring reauthorization', () => {
+  const h = harness({user: {token: 'new-access', refreshToken: 'new-refresh', tokenExpiresAt: String(Date.now() + 3600000)}, fetch: () => ({status: 401, body: {}})});
+  assert.equal(h.context.markReauthRequired_('old-access'), false);
+  assert.equal(h.users.data.reauthRequired, undefined);
+});
+
+test('disconnect removes all SheetBoard credentials but preserves unrelated UserProperties', () => {
+  const h = harness({user: {token: 'access-a', login: 'admin', deviceCode: 'device-a', authType: 'oauth', refreshToken: 'refresh-a', tokenExpiresAt: '123', refreshTokenExpiresAt: '456', reauthRequired: 'true', unrelated: 'keep'}});
+  h.context.disconnectConfirmed();
+  assert.deepEqual(h.users.data, {authEpoch: '1', unrelated: 'keep'});
+  assert.equal(h.triggers.length, 0);
+});
+
+test('refresh can return a non-expiring OAuth token and clears old refresh metadata', () => {
+  const h = harness({user: {token: 'access-a', refreshToken: 'refresh-a', tokenExpiresAt: String(Date.now() - 1000), refreshTokenExpiresAt: String(Date.now() + 10 * 86400000), authType: 'oauth'}, fetch: request => {
+    if (request.url.endsWith('/login/oauth/access_token')) return {status: 200, body: {access_token: 'access-no-expiry'}};
+    return {status: 200, body: {}};
+  }});
+  assert.equal(h.context.refreshAccessToken_(false), 'access-no-expiry');
+  assert.equal(h.users.data.token, 'access-no-expiry');
+  assert.equal(h.users.data.authType, 'oauth');
+  assert.equal(h.users.data.refreshToken, undefined);
+  assert.equal(h.users.data.tokenExpiresAt, undefined);
+  assert.equal(h.users.data.refreshTokenExpiresAt, undefined);
+});
+
+test('an expired refresh-token lifetime requires reconnection without sending the token', () => {
+  const h = harness({user: {token: 'access-a', refreshToken: 'refresh-secret', tokenExpiresAt: String(Date.now() - 1000), refreshTokenExpiresAt: String(Date.now() - 1000)}});
+  assert.throws(() => h.context.refreshAccessToken_(false), /GitHub連携の期限が切れたため、公開が止まっています/);
+  assert.equal(h.requests.length, 0);
+  assert.equal(h.users.data.refreshToken, 'refresh-secret');
+  assert.equal(h.users.data.reauthRequired, 'true');
+  assert.equal(JSON.stringify(h.mails).includes('refresh-secret'), false);
+});
+
+
+test('overallStatus_ covers setup, reconnect, failure, stale, empty, pending, and healthy states', () => {
+  const h = harness(); const c = h.context, p = h.shared;
+  assert.equal(c.overallStatus_().level, 'none');
+  p.setProperties({gistId:'g',worldUrl:'u',lastPublishOutcome:'reauth_required'});
+  assert.deepEqual(plain(c.overallStatus_()), {level:'error',icon:'⚠',text:'GitHub連携の期限が切れたため、公開が止まっています',action:'管理者がメニュー「SheetBoard → 管理者用 → GitHub連携をやり直す」を実行してください（URLは変わりません）'});
+  p.setProperty('lastPublishOutcome','failure'); p.setProperty('lastPublishStatus','failure'); p.setProperty('lastError','2026-01-01T00:00:00.000Z 試験エラー');
+  assert.match(c.overallStatus_().text,/試験エラー/);
+  p.setProperty('lastPublishStatus','success'); p.setProperty('lastPublishOutcome','success'); p.setProperty('lastPublishMillis',String(Date.now()-91*60000)); p.setProperty('publishedNames','["board1"]');
+  assert.equal(c.overallStatus_().level,'warn');
+  p.deleteProperty('lastPublishMillis'); p.setProperty('publishedNames','[]');
+  assert.match(c.overallStatus_().text,/範囲がありません/);
+  p.setProperty('publishedNames','["board1"]'); p.setProperty('pending','queued');
+  assert.equal(c.overallStatus_().icon,'⏳');
+  p.deleteProperty('pending'); assert.equal(c.overallStatus_().level,'ok');
+});
+
+test('overallStatus_ keeps text and action distinct in every branch', () => {
+  const branches = [
+    p => {},
+    p => p.setProperties({gistId:'g',worldUrl:'u',lastPublishOutcome:'reauth_required'}),
+    p => p.setProperties({gistId:'g',worldUrl:'u',lastPublishStatus:'failure',lastError:'error'}),
+    p => p.setProperties({gistId:'g',worldUrl:'u',lastPublishMillis:String(Date.now()-91*60000),publishedNames:'["board1"]'}),
+    p => p.setProperties({gistId:'g',worldUrl:'u',publishedNames:'[]'}),
+    p => p.setProperties({gistId:'g',worldUrl:'u',publishedNames:'["board1"]',pending:'queued'}),
+    p => p.setProperties({gistId:'g',worldUrl:'u',publishedNames:'["board1"]'})
+  ];
+  for (const setup of branches) {
+    const h = harness(), c = h.context;
+    setup(h.shared);
+    const status = c.overallStatus_();
+    assert.notEqual(status.text, status.action);
+  }
+});
+test('showStatus presents friendly state, a wired copy control, and localized error time without internal values', () => {
+  const h = harness({doc:{gistId:'g',gistOwner:'admin',worldUrl:'https://example.test/world',lastPublishStatus:'failure',lastPublishOutcome:'failure',lastPublishMillis:String(Date.now()),lastPublishTime:'2026-01-02T03:04:00.000Z',updatedUnix:'1767323040',lastError:'2026-01-02T03:04:00.000Z 公開失敗',warnings:'[]',publishedNames:'["board1"]'}});
+  h.context.showStatus(); const html=h.dialogs.at(-1)[1];
+  assert.match(html,/id="copyworld" onclick="copyText\('worldUrl'\)"/); assert.match(html,/class="status/);
+  for(const secret of ['success','failure','状態未記録','2026-01-02T']) assert.equal(html.includes(secret),false);
+  assert.match(html,/2026\/01\/02 12:04/);
+});
+
+test('finishSetup returns a zero range count and finish targets exist in every setup screen', () => {
+  const h=harness(); h.context.readRanges_=()=>({ranges:{},warnings:[],rowStatus:[]}); h.shared.setProperties({gistId:'g',gistOwner:'admin',worldUrl:'https://example.test/world'});
+  h.context.checkGistOwner_=()=>{}; h.context.publish_=()=>{h.shared.setProperty('publishedNames','[]');return true;};
+  const result=h.context.finishSetup(); assert.equal(result.rangeCount,0); assert.equal(result.url,'https://example.test/world');
+  h.context.showFinishDialog_();
+  const finishHtml=h.dialogs.at(-1)[1];
+  assert.match(finishHtml,/<div id="result" style="display:none"><\/div>/);
+  assert.match(finishHtml,/function finish\(\)/);
+  assert.match(finishHtml,/掲示板に出るのは、設定タブに書いた範囲だけです。/);
+  assert.match(finishHtml,/次にやること/);
+  assert.match(finishHtml,/document\.getElementById\("copyurl"\)\.onclick=function\(\)\{copyText\("url"\)\}/);
+
+  const tokenless=harness({clientId:''});
+  tokenless.context.beginAuthorization_(true);
+  const tokenHtml=tokenless.dialogs.at(-1)[1];
+  assert.match(tokenHtml,/<div id="result" style="display:none"><\/div>/);
+  assert.match(tokenHtml,/saveToken/);
+
+  const device=harness({fetch:request=>request.url.endsWith('/device/code')
+    ? {status:200,body:{device_code:'device',user_code:'ABCD',verification_uri:'https://github.com/login/device',interval:5}}
+    : {status:200,body:{}}});
+  device.context.beginAuthorization_(true);
+  const deviceHtml=device.dialogs.at(-1)[1];
+  assert.match(deviceHtml,/<div id="result" style="display:none"><\/div>/);
+  assert.match(deviceHtml,/if\(r.status==="success"\)\{\(r\.handoff\?/);
+  assert.match(deviceHtml,/onclick="copyCode\(\)"/);
+  for (const html of [finishHtml,tokenHtml,deviceHtml]) {
+    assert.equal((html.match(/function fail\(/g)||[]).length,1);
+    for (const match of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) new vm.Script(match[1]);
+  }
+
+  const elements={
+    setupFlow:{style:{}},
+    result:{style:{},innerHTML:''},
+    status:{textContent:''},
+    url:{value:''}
+  };
+  device.context.document={getElementById:id=>elements[id] || (elements[id]={style:{},value:'',innerHTML:''}),querySelector:()=>null};
+  device.context.event={currentTarget:{disabled:false}};
+  device.context.google={script:{run:{
+    withSuccessHandler:callback=>({withFailureHandler:()=>({finishSetup:()=>callback({url:'https://example.test/world',rangeCount:0})})})
+  }}};
+  vm.runInContext(device.context.clientHelpers_(),device.context);
+  device.context.finish();
+  assert.equal(elements.setupFlow.style.display,'none');
+  assert.equal(elements.result.style.display,'block');
+  assert.equal(elements.url.value,'https://example.test/world');
+  assert.match(elements.result.innerHTML,/次にやること/);
+});
+
+test('user-facing wording avoids the public URL warning and internal error terms', () => {
+  assert.equal(script.includes('公開内容はURLを知っている人なら誰でも読めます。'), false);
+  const tokenless = harness({clientId: ''});
+  tokenless.context.beginAuthorization_(false);
+  const device = harness({fetch: request => request.url.endsWith('/device/code')
+    ? {status: 200, body: {device_code: 'device', user_code: 'ABCD', verification_uri: 'https://github.com/login/device', interval: 5}}
+    : {status: 200, body: {}}});
+  device.context.beginAuthorization_(true);
+  const finish = harness(); finish.context.showFinishDialog_();
+  for (const h of [tokenless, device, finish]) {
+    assert.equal(h.dialogs.at(-1)[1].includes('公開内容はURLを知っている人なら誰でも読めます。'), false);
+  }
+  assert.equal(script.includes('再試行してください'), false);
+  const userFacingSource = script
+    .replace(/\/\/[^\r\n]*/g, '')
+    .replace('GitHubで作成した、gist権限のあるPersonal access token（classic）を貼り付けてください。', '');
+  for (const term of ['OAuth', 'HTTP', '500 KB']) assert.equal(userFacingSource.includes(term), false, term);
+});
+
+test('setup by a tokenless staff member only shows the handoff explanation', () => {
+  const h=harness({user:{},doc:{gistId:'existing',gistOwner:'admin',worldUrl:'old'}}); h.context.startSetup();
+  assert.equal(h.requests.length,0); assert.match(h.dialogs.at(-1)[1],/スタッフの方は操作不要です/); assert.match(h.dialogs.at(-1)[1],/startSetupConfirmed/);
+  assert.deepEqual(plain(h.dialogs.at(-1)[2]),{close:false});
+});
+
+test('destination recreation only displays confirmation before any GitHub request and hides the new URL until success', () => {
+  const h=harness({user:{},doc:{gistId:'existing',gistOwner:'admin',worldUrl:'old'}}); h.context.recreateDestination();
+  assert.equal(h.requests.length,0); const html=h.dialogs.at(-1)[1];
+  assert.match(html,/admin/); assert.match(html,/更新されなくなります/); assert.match(html,/id="run" disabled/);
+  assert.match(html,/id="newurlresult" style="display:none"/);
+  assert.ok(html.indexOf('x.style.display="block"') < html.indexOf('x.innerHTML="<input id=newurl'));
+  assert.match(html,/id=copynew/); assert.match(html,/copyText\("newurl"\)/);
+  for (const match of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) new vm.Script(match[1]);
+});
+
+test('errorText_ preserves source wording and only treats GitHub 5xx errors as temporary', () => {
+  const {context:c}=harness();
+  assert.match(c.errorText_(Object.assign(new Error('bad'),{status:403})),/エラー番号 403/);
+  assert.equal(c.errorText_(Object.assign(new Error('更新が混み合っています。'),{status:503})),'GitHubに公開できませんでした（エラー番号 503）。メニュー「SheetBoard → 状態とURLを表示」の内容を配布者に伝えてください。');
+  assert.match(c.errorText_(Object.assign(new Error('GitHubへ接続できません'),{status:503,githubOrigin:true})),/GitHubが一時的に応答していません/);
+  assert.equal(c.errorText_(new Error('OAuth token scope')),'処理できませんでした。しばらくしても直らない場合は、メニュー「SheetBoard → 状態とURLを表示」の内容を配布者に伝えてください。');
+  assert.match(c.errorText_(Object.assign(new Error('bad'),{status:422})),/エラー番号 422/);
+  assert.match(c.errorText_(Object.assign(new Error('unauthorized_client'),{status:403})),/エラー番号 403/);
+});
+
+test('failure email gives a clear subject and numbered next steps', () => {
+  const h=harness({doc:{gistId:'g',gistOwner:'admin',worldUrl:'u',lastPublishStatus:'failure',lastPublishOutcome:'failure',lastError:'2026-01-01T00:00:00.000Z test'}});
+  h.context.notifyError_(Object.assign(new Error('x'),{status:403}),'friendly',h.shared);
+  assert.equal(h.mails[0][1],'SheetBoard: 掲示板の公開が止まっています'); assert.match(h.mails[0][2],/1\./); assert.match(h.mails[0][2],/https:\/\/example.test\/sheet/);
+});
+
+
+test('readRanges_ preserves tab names and returns row statuses for invalid and valid rows', () => {
+  const h=harness(), c=h.context;
+  const config=[['#sample','Source!A1'],['ok','Source!A1','',false,false,'',''],['ok','Source!A1','',false,false,'',''],['','Source!A1'],['missing','Gist!A1'],['badopts','Source!A1','',false,false,'oops','wrong'],['valid','Source!A1','',false,false,'','']];
+  const settings={getLastRow:()=>8,getRange:(r,col,n)=>({getValues:()=>config})};
+  const cell={getRow:()=>1,getColumn:()=>1,getNumRows:()=>1,getNumColumns:()=>1,getDisplayValues:()=>[['x']],getDataValidations:()=>[[null]]};
+  const source={getName:()=> 'Source',getLastRow:()=>2,getLastColumn:()=>2,getRange:()=>cell,isRowHiddenByUser:()=>false,isRowHiddenByFilter:()=>false,isColumnHiddenByUser:()=>false};
+  const ss={getSheetByName:n=>n==='SheetBoard設定'?settings:n==='Source'?source:null,getSheets:()=>[source]};
+  c.SpreadsheetApp.getActiveSpreadsheet=()=>ss; c.readRanges_=c.__readRanges_;
+  const result=c.readRanges_();
+  assert.deepEqual(Object.keys(plain(result.ranges)), ['ok', 'badopts', 'valid']);
+  assert.equal(result.rowStatus[0],'非公開（名前の先頭が # のため）');
+  assert.match(result.rowStatus[2],/同じ名前が上の行/); assert.match(result.rowStatus[3],/名前（A列）が空/);
+  assert.match(result.rowStatus[4],/シート「Gist」が見つかりません/);
+  assert.match(result.rowStatus[5],/列幅の比の書き方が違うため無視しました/); assert.match(result.rowStatus[5],/配置の書き方が違うため無視しました/);
+  assert.match(result.rowStatus[6],/✔ 掲示板に表示されます/);
+});
+
+test('readRanges_ omits row-height and column-width reads when formatting is disabled', () => {
+  const h = harness(), c = h.context;
+  let rowHeightCalls = 0, columnWidthCalls = 0;
+  const config = [['range', 'Source!A1', '', false, false, '', '']];
+  const settings = {getLastRow: () => 2, getRange: () => ({getValues: () => config})};
+  const cell = {getRow: () => 1, getColumn: () => 1, getNumRows: () => 1, getNumColumns: () => 1,
+    getDisplayValues: () => [['x']], getDataValidations: () => [[null]]};
+  const source = {getName: () => 'Source', getLastRow: () => 1, getLastColumn: () => 1, getRange: () => cell,
+    isRowHiddenByUser: () => false, isRowHiddenByFilter: () => false, isColumnHiddenByUser: () => false,
+    getRowHeight: () => { rowHeightCalls++; return 21; }, getColumnWidth: () => { columnWidthCalls++; return 80; }};
+  c.SpreadsheetApp.getActiveSpreadsheet = () => ({getSheetByName: n => n === 'SheetBoard設定' ? settings : source, getSheets: () => [source]});
+  c.readRanges_();
+  assert.equal(rowHeightCalls, 0);
+  assert.equal(columnWidthCalls, 0);
+});
+
+test('writeSheetStatus_ never rereads ranges and batches changed H and J values', () => {
+  const h=harness({doc:{rowStatus:'["✔ ok"]'}});
+  const values=new Map([['1,8','状態'],['2,8','old'],['1,10','SheetBoard の状態'],['2,10','old']]);
+  const writes=[];
+  const sheet={getLastRow:()=>2,getRange:(r,c,n)=>({
+    getValues:()=>Array.from({length:n||1},(_,i)=>[values.get((r+i)+','+c)||'']),
+    setValues:rows=>{writes.push([r,c,rows]);rows.forEach((row,i)=>values.set((r+i)+','+c,row[0]));}
+  })};
+  h.context.SpreadsheetApp.getActiveSpreadsheet=()=>({getSheetByName:()=>sheet});
+  h.context.readRanges_=()=>{throw new Error('writeSheetStatus_ must use cached statuses');};
+  h.context.writeSheetStatus_();
+  assert.deepEqual(writes.map(([,column])=>column),[8,10]);
+  assert.equal(writes[0][2].length,2);
+  assert.equal(writes[1][2].length,4);
+  const changed=writes.length;
+  h.context.writeSheetStatus_();
+  assert.equal(writes.length,changed);
+});
+
+test('writeSheetStatus_ clears stale H values below cached configuration rows in one batch', () => {
+  const h=harness({doc:{rowStatus:'["✔ ok"]'}});
+  const values=new Map([['1,8','状態'],['2,8','✔ ok'],['3,8','stale'],['4,8','stale']]);
+  const writes=[];
+  const sheet={getLastRow:()=>4,getRange:(r,c,n)=>({
+    getValues:()=>Array.from({length:n||1},(_,i)=>[values.get((r+i)+','+c)||'']),
+    setValues:rows=>{writes.push([r,c,rows]);rows.forEach((row,i)=>values.set((r+i)+','+c,row[0]));}
+  })};
+  h.context.SpreadsheetApp.getActiveSpreadsheet=()=>({getSheetByName:()=>sheet});
+  h.context.writeSheetStatus_();
+  const rowsWrite=writes.find(([,column])=>column===8);
+  assert.deepEqual(plain(rowsWrite[2]),[['状態'],['✔ ok'],[''],['']]);
+});
+
+test('setPending_ writes status from properties without calling readRanges_', () => {
+  const h=harness({doc:{rowStatus:'["waiting"]'}});
+  const writes=[];
+  const sheet={getLastRow:()=>2,getRange:(r,c,n)=>({
+    getValues:()=>Array.from({length:n||1},()=>['']),
+    setValues:rows=>writes.push([r,c,rows])
+  })};
+  h.context.SpreadsheetApp.getActiveSpreadsheet=()=>({getSheetByName:()=>sheet});
+  h.context.readRanges_=()=>{throw new Error('setPending_ must not reread ranges');};
+  h.context.setPending_();
+  assert.equal(h.shared.data.pending,'pending-1');
+  assert.deepEqual(plain(writes.find(([,column])=>column===8)[2]),[['状態'],['waiting']]);
+});
+
+test('tokenless addSelectionToBoard marks its new row as waiting for the administrator', () => {
+  const h=harness({user:{},doc:{rowStatus:'[]'}});
+  const source={getName:()=> 'Source'};
+  const selected={getNumRows:()=>2,getNumColumns:()=>2,getA1Notation:()=> 'A1:B2',getSheet:()=>source};
+  const rows=[['#sample','Source!A1:F20','',false,true]];
+  const values=new Map();
+  const settings={
+    getLastRow:()=>2,
+    getRange:(r,c,n)=>({
+      getValues:()=>c===1?rows:Array.from({length:n||1},(_,i)=>[values.get((r+i)+','+c)||'']),
+      setValues:next=>{
+        if(c===1) rows[r-2]=next[0];
+        else next.forEach((row,i)=>values.set((r+i)+','+c,row[0]));
+      }
+    })
+  };
+  const ss={getActiveRange:()=>selected,getActiveSheet:()=>source,getSheetByName:n=>n==='SheetBoard設定'?settings:null,
+    getSheets:()=>[source],setActiveSheet:()=>{},getSpreadsheetTimeZone:()=> 'Asia/Tokyo'};
+  h.context.SpreadsheetApp.getActiveSpreadsheet=()=>ss;
+  h.context.ensureSettingsSheet_=()=>{};
+  h.context.readRanges_=()=>{throw new Error('tokenless add must not read ranges');};
+  h.context.addSelectionToBoard();
+  assert.equal(values.get('2,8'),'⏳ 管理者の自動公開を待っています');
+});
+
+test('onEditInstalled ignores status-column edits on the settings tab', () => {
+  const h=harness(); const e={range:{getSheet:()=>({getName:()=> 'SheetBoard設定'}),getColumn:()=>8}}; h.context.onEditInstalled(e);
+  assert.equal(h.requests.length,0); assert.equal(h.lockWaits.length,0);
+});
+
+test('status sheet write failures never turn a successful publication into failure', () => {
+  const h=harness(); h.context.SpreadsheetApp.getActiveSpreadsheet=()=>({getName:()=> 'テストシート',getUrl:()=> 'https://example.test/sheet',getSpreadsheetTimeZone:()=> 'Asia/Tokyo',getSheetByName:()=>({getLastRow:()=>1,getRange:(r,c,n)=>({getValues:()=>Array.from({length:n||1},()=>['']),setValues:()=>{throw Error('protected')}})})});
+  assert.equal(h.context.publish_(true),true);
+});
+
+
+test('addSelectionToBoard replaces the sample then adds board2, with staff guidance for invalid selections and protected settings', () => {
+  const h=harness(); const c=h.context; let rows=[['#sample','Source!A1:F20','',false,true]]; const written=[]; let protectedWrite=false;
+  const source={getName:()=> 'Source'}; let active=source; let selected={getNumRows:()=>2,getNumColumns:()=>3,getA1Notation:()=> 'B2:D3',getSheet:()=>source};
+  const settings={getLastRow:()=>rows.length+1,getRange:(r,col,n)=>({getValues:()=>rows,setValues:v=>{if(protectedWrite)throw Error('protected');written.push([r,v]);rows[r-2]=v[0]}})};
+  const ss={getActiveRange:()=>selected,getActiveSheet:()=>active,getSheetByName:n=>n==='SheetBoard設定'?settings:null,getSheets:()=>[source],setActiveSheet:()=>{}};
+  c.SpreadsheetApp.getActiveSpreadsheet=()=>ss;c.ensureSettingsSheet_=()=>{};c.writeSheetStatus_=()=>{};c.publish_=()=>true;
+  c.addSelectionToBoard();assert.equal(written[0][1][0][0],'board1');assert.equal(written[0][1][0][1],'Source!B2:D3');
+  c.addSelectionToBoard();assert.equal(written[1][1][0][0],'board2');
+  active={getName:()=> 'SheetBoard設定'};c.addSelectionToBoard();assert.match(h.dialogs.at(-1)[1],/表全体をドラッグで選択/);
+  active=source;selected={getNumRows:()=>1,getNumColumns:()=>1,getA1Notation:()=> 'A1',getSheet:()=>source};c.addSelectionToBoard();assert.match(h.dialogs.at(-1)[1],/メニュー「SheetBoard → 選択範囲を掲示板に追加」をもう一度実行/);
+  selected={getNumRows:()=>2,getNumColumns:()=>2,getA1Notation:()=> 'A1:B2',getSheet:()=>source};protectedWrite=true;c.addSelectionToBoard();assert.match(h.dialogs.at(-1)[1],/設定タブは管理者だけが編集できます/);
 });

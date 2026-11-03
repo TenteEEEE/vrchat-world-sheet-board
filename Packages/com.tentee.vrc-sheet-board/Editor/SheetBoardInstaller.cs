@@ -12,16 +12,17 @@ using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 using UnityEngine.TextCore.LowLevel;
 using UnityEngine.UI;
+using VRC.Udon;
 
 namespace SheetBoardEditor
 {
     public static partial class SheetBoardInstaller
     {
-        private static string RootDir => AssetDatabase.IsValidFolder("Packages/com.tentee.vrc-sheet-board") ? "Packages/com.tentee.vrc-sheet-board/" : "Assets/SheetBoard/";
+        internal static string RootDir => AssetDatabase.IsValidFolder("Packages/com.tentee.vrc-sheet-board") ? "Packages/com.tentee.vrc-sheet-board/" : "Assets/SheetBoard/";
         private static string SourcePath => RootDir + "Runtime/SheetBoardSource";
         private static string DisplayPath => RootDir + "Runtime/SheetBoardDisplay";
         private static string FontPath => RootDir + "Fonts/SheetBoard JP Dynamic.asset";
-        private static string SourcePrefab => RootDir + "Prefabs/SheetBoard Source.prefab";
+        internal static string SourcePrefab => RootDir + "Prefabs/SheetBoard Source.prefab";
         internal static string DisplayPrefab => RootDir + "Prefabs/SheetBoard Display.prefab";
         internal static string DisplayDarkPrefab => RootDir + "Prefabs/SheetBoard Display Dark.prefab";
         private const string SourceTemp = "SheetBoard Source (Build Temp)";
@@ -85,28 +86,8 @@ namespace SheetBoardEditor
             display.columnTemplate.margin = Vector4.zero;
             SetEdges(display.columnTemplate.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
             frame.SetActive(false);
-            GameObject overlayFrame = new GameObject("OverlayTemplate", typeof(RectTransform), typeof(RectMask2D));
-            overlayFrame.transform.SetParent(table.transform, false);
-            SetEdges(overlayFrame.GetComponent<RectTransform>(), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-            display.overlayTemplate = CreateText(overlayFrame.transform, "Text", 32f, font, TextAlignmentOptions.Center);
-            display.overlayTemplate.enableWordWrapping = true;
-            display.overlayTemplate.overflowMode = TextOverflowModes.Overflow;
-            display.overlayTemplate.richText = true;
-            display.overlayTemplate.margin = Vector4.zero;
-            display.overlayTemplate.raycastTarget = false;
-            SetEdges(display.overlayTemplate.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-            overlayFrame.SetActive(false);
-            GameObject overlayNoWrapFrame = new GameObject("OverlayNoWrapTemplate", typeof(RectTransform), typeof(RectMask2D));
-            overlayNoWrapFrame.transform.SetParent(table.transform, false);
-            SetEdges(overlayNoWrapFrame.GetComponent<RectTransform>(), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-            display.overlayNoWrapTemplate = CreateText(overlayNoWrapFrame.transform, "Text", 32f, font, TextAlignmentOptions.Center);
-            display.overlayNoWrapTemplate.enableWordWrapping = false;
-            display.overlayNoWrapTemplate.overflowMode = TextOverflowModes.Overflow;
-            display.overlayNoWrapTemplate.richText = true;
-            display.overlayNoWrapTemplate.margin = Vector4.zero;
-            display.overlayNoWrapTemplate.raycastTarget = false;
-            SetEdges(display.overlayNoWrapTemplate.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-            overlayNoWrapFrame.SetActive(false);
+            display.overlayTemplate = CreateOverlayTemplate(table.transform, font, "OverlayTemplate", true);
+            display.overlayNoWrapTemplate = CreateOverlayTemplate(table.transform, font, "OverlayNoWrapTemplate", false);
             display.cellTemplate = CreateImage(table.transform, "CellTemplate", Color.white);
             SetEdges(display.cellTemplate.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
             display.cellTemplate.gameObject.SetActive(false);
@@ -116,9 +97,11 @@ namespace SheetBoardEditor
             display.statusText.color = display.titleText.color;
             SetEdges(display.statusText.rectTransform, Vector2.zero, new Vector2(1, 0), new Vector2(75, 10), new Vector2(-250, 70));
             Button button = CreateButton(canvas.transform, font);
+            display.refreshButton = button;
+            display.refreshLabel = button.GetComponentInChildren<TMP_Text>();
             SetEdges(button.GetComponent<RectTransform>(), new Vector2(1, 0), new Vector2(1, 0), new Vector2(-220, 15), new Vector2(-40, 65));
             UnityEventTools.AddStringPersistentListener(button.onClick, UdonSharpEditorUtility.GetBackingUdonBehaviour(display).SendCustomEvent, "OnRefreshPressed");
-            ApplyMaterials(root, ui, tmp);
+            ApplyMaterials(root, font, ui, tmp);
             UdonSharpEditorUtility.CopyProxyToUdon(display);
             SavePrefab(root, path, lightTheme ? "SheetBoard Display" : "SheetBoard Display Dark");
             }
@@ -173,7 +156,7 @@ namespace SheetBoardEditor
                     x = Mathf.Max(x, existing.transform.position.x + 2f);
             board.transform.position = new Vector3(x, 1.5f, 0);
             SheetBoardDisplay display = board.GetComponent<SheetBoardDisplay>();
-            Undo.RecordObject(display, "Configure Sheet Board Display");
+            RecordProxyUndo(display, "Configure Sheet Board Display");
             display.source = source;
             UdonSharpEditorUtility.CopyProxyToUdon(display);
             EditorUtility.SetDirty(display);
@@ -206,10 +189,10 @@ namespace SheetBoardEditor
         }
         internal static bool CheckProgramsCompiled()
         {
-            if (AllProgramsCompiled()) return true;
+            if (!UdonSharpProgramAsset.AnyUdonSharpScriptHasError() && AllProgramsCompiled()) return true;
             UdonSharpCompilerV1.CompileSync(new UdonSharpCompileOptions { IsEditorBuild = true });
-            if (AllProgramsCompiled()) return true;
-            EditorUtility.DisplayDialog("Sheet Board", "UdonSharp のコンパイルエラーを直してからもう一度実行してください。", "OK");
+            if (!UdonSharpProgramAsset.AnyUdonSharpScriptHasError() && AllProgramsCompiled()) return true;
+            EditorUtility.DisplayDialog("Sheet Board", "UdonSharp のコンパイルエラーがあります（Sheet Board 以外のスクリプトのエラーでも止まります）。Console のエラーを直してから、もう一度実行してください。", "OK");
             return false;
         }
         private static void EnsureProgramAssets()
@@ -219,9 +202,11 @@ namespace SheetBoardEditor
             AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
             UdonSharpCompilerV1.CompileSync(new UdonSharpCompileOptions { IsEditorBuild = true });
             AssetDatabase.SaveAssets();
+            if (UdonSharpProgramAsset.AnyUdonSharpScriptHasError())
+                throw new System.InvalidOperationException("UdonSharp のコンパイルエラーがあります（Sheet Board 以外のスクリプトのエラーでも止まります）。Console のエラーを直してから、もう一度実行してください。");
             if (UdonSharpProgramAsset.GetProgramAssetForClass(typeof(SheetBoardSource)) == null || UdonSharpProgramAsset.GetProgramAssetForClass(typeof(SheetBoardDisplay)) == null)
                 throw new System.InvalidOperationException("[SheetBoard] Failed to associate UdonSharp program assets.");
-            if (created) throw new System.InvalidOperationException("[SheetBoard] Created UdonSharp program assets. Run Build Prefabs again.");
+            if (created) throw new System.InvalidOperationException("[SheetBoard] UdonSharp のプログラムを作成しました。Build Prefabs をもう一度実行してください（初回だけ必要です）。");
         }
         private static bool EnsureProgramAsset(string path)
         {
@@ -273,12 +258,33 @@ namespace SheetBoardEditor
             if (material == null) { if (font.material == null) throw new System.InvalidOperationException("Missing font material."); material = new Material(font.material) { name = "SheetBoard TMP Material" }; AssetDatabase.CreateAsset(material, path); }
             material.renderQueue = 3000; material.SetInt("unity_GUIZTestMode", (int)CompareFunction.LessEqual); EditorUtility.SetDirty(material); return material;
         }
-        private static void ApplyMaterials(GameObject root, Material ui, Material tmp)
+        private static TMP_Text CreateOverlayTemplate(Transform table, TMP_FontAsset font, string name, bool wrap)
+        {
+            GameObject frame = new GameObject(name, typeof(RectTransform), typeof(RectMask2D));
+            frame.transform.SetParent(table, false);
+            SetEdges(frame.GetComponent<RectTransform>(), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            TMP_Text text = CreateText(frame.transform, "Text", 32f, font, TextAlignmentOptions.Center);
+            text.enableWordWrapping = wrap;
+            text.overflowMode = TextOverflowModes.Overflow;
+            text.richText = true;
+            text.margin = Vector4.zero;
+            text.raycastTarget = false;
+            SetEdges(text.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            frame.SetActive(false);
+            return text;
+        }
+        internal static void RecordProxyUndo(UdonSharpBehaviour proxy, string name)
+        {
+            UdonBehaviour backing = UdonSharpEditorUtility.GetBackingUdonBehaviour(proxy);
+            if (backing == null) Undo.RecordObject(proxy, name);
+            else Undo.RecordObjects(new Object[] { proxy, backing }, name);
+        }
+        private static void ApplyMaterials(GameObject root, TMP_FontAsset font, Material ui, Material tmp)
         {
             foreach (Image image in root.GetComponentsInChildren<Image>(true)) image.material = ui;
-            foreach (TextMeshProUGUI text in root.GetComponentsInChildren<TextMeshProUGUI>(true)) { text.font = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(FontPath); text.fontSharedMaterial = tmp; }
+            foreach (TextMeshProUGUI text in root.GetComponentsInChildren<TextMeshProUGUI>(true)) { text.font = font; text.fontSharedMaterial = tmp; }
         }
-        private static void SavePrefab(GameObject root, string path, string name) { root.name = name; PrefabUtility.SaveAsPrefabAsset(root, path); Object.DestroyImmediate(root); }
+        private static void SavePrefab(GameObject root, string path, string name) { root.name = name; PrefabUtility.SaveAsPrefabAsset(root, path); }
         private static void DestroyLeftoverBuildRoot(string name)
         {
             Scene scene = SceneManager.GetActiveScene(); if (!scene.IsValid() || !scene.isLoaded) return;

@@ -4,7 +4,7 @@ using SheetBoardEditor;
 using UnityEditor;
 using UnityEngine;
 
-namespace SheetBoardDevEditor
+namespace SheetBoardDev
 {
     public static class SheetBoardDevMenu
     {
@@ -21,7 +21,7 @@ namespace SheetBoardDevEditor
         public static void BuildPrefabsBatch() { RunBatch(BuildPrefabs); }
         public static void ExportUnityPackageBatch() { RunBatch(ExportUnityPackage); }
 
-        private static void RunBatch(Action action)
+        internal static void RunBatch(Action action)
         {
             int code = 0;
             try { action(); }

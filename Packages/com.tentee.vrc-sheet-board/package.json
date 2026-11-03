@@ -1,7 +1,7 @@
 {
   "name": "com.tentee.vrc-sheet-board",
   "displayName": "Sheet Board",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "unity": "2022.3",
   "author": {
     "name": "TenteEEEE",
@@ -9,7 +9,7 @@
   },
   "description": "Show a Google Sheets range on boards in a VRChat world and update it without re-uploading the world (Apps Script -> GitHub Gist -> String Loading).",
   "license": "MIT",
-  "url": "https://github.com/TenteEEEE/vrchat-world-sheet-board/releases/download/0.1.0/com.tentee.vrc-sheet-board-0.1.0.zip",
+  "url": "https://github.com/TenteEEEE/vrchat-world-sheet-board/releases/download/0.1.1/com.tentee.vrc-sheet-board-0.1.1.zip",
   "documentationUrl": "https://github.com/TenteEEEE/vrchat-world-sheet-board/blob/main/README.ja.md",
   "changelogUrl": "https://github.com/TenteEEEE/vrchat-world-sheet-board/blob/main/Packages/com.tentee.vrc-sheet-board/CHANGELOG.md",
   "keywords": [
