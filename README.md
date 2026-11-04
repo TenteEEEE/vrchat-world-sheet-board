@@ -3,6 +3,7 @@
 Show a Google Sheets range on boards in a VRChat world, and update it **without re-uploading the world**. Built for event teams: staff edit the team's spreadsheet, and the boards in the world follow within a few minutes.
 
 - Keeps the sheet's look: background and text colours, bold/italic/underline/strikethrough, merged cells, column widths, row heights, alignment.
+- Columns and text auto-fit by default so cell contents stay inside the board; manual column ratios remain available.
 - Visitors do not need "Allow Untrusted URLs".
 - No network sync: every client reads the same published JSON, so late joiners see the same thing.
 

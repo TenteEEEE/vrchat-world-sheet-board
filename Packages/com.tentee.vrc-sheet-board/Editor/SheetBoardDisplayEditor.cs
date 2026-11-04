@@ -70,6 +70,7 @@ namespace SheetBoardEditor
             {
                 Draw("lightTheme");
                 Draw("textScale");
+                Draw("autoFitColumns");
                 Draw("maxRows");
                 Draw("maxCols");
                 Draw("showTitle");
@@ -185,6 +186,7 @@ namespace SheetBoardEditor
                 case "overlayTemplate": return new GUIContent("重ね表示テンプレート");
                 case "overlayNoWrapTemplate": return new GUIContent("重ね表示テンプレート（折り返しなし）");
                 case "textScale": return new GUIContent("文字の拡大率");
+                case "autoFitColumns": return new GUIContent("列幅を自動調整", "文字が列に収まるよう列幅と文字サイズを自動で決める");
                 case "maxRows": return new GUIContent("最大行数");
                 case "maxCols": return new GUIContent("最大列数");
                 case "showTitle": return new GUIContent("タイトルを表示");

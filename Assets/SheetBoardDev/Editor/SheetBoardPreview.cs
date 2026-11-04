@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Text;
@@ -9,12 +10,17 @@ using UdonSharpEditor;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
 using VRC.Udon;
 
 namespace SheetBoardDev
 {
     public static class SheetBoardPreview
     {
+        private static readonly List<string> failedClipLabels = new List<string>();
+        private const float OverlayPadding = 6f;
+
         public static void RenderSampleBatch()
         {
             SheetBoardDevMenu.RunBatch(Render);
@@ -25,6 +31,7 @@ namespace SheetBoardDev
         }
         private static void Render()
         {
+            failedClipLabels.Clear();
             VerifyWiring();
             EditorSceneManager.NewScene(NewSceneSetup.EmptyScene);
             GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(SheetBoardInstaller.DisplayPrefab);
@@ -75,7 +82,7 @@ namespace SheetBoardDev
                 RenderBusyRange(display, source, Path.Combine(temp, "SheetBoardPreview_busy.png"), camera, renderTexture, image);
                 string fidelityPath = Path.Combine(Path.GetDirectoryName("Assets/SheetBoardDev/Samples/sample.json"), "sample_fidelity.json");
                 string fidelityJson = File.ReadAllText(fidelityPath, Encoding.UTF8);
-                string[] ranges = { "event", "wraptest" };
+                string[] ranges = { "event", "wraptest", "fitcase" };
                 string[] prefabPaths = { SheetBoardInstaller.DisplayPrefab, SheetBoardInstaller.DisplayDarkPrefab };
                 string[] themes = { "light", "dark" };
                 for (int r = 0; r < ranges.Length; r++)
@@ -97,6 +104,16 @@ namespace SheetBoardDev
                         string file = "SheetBoardPreview_" + ranges[r] + "_" + themes[t] + ".png";
                         RenderRange(display, source, ranges[r], Path.Combine(temp, file), camera, renderTexture, image);
                     }
+                }
+                if (failedClipLabels.Count > 0)
+                {
+                    string labels = "";
+                    for (int i = 0; i < failedClipLabels.Count; i++)
+                    {
+                        if (i > 0) labels += ", ";
+                        labels += failedClipLabels[i];
+                    }
+                    throw new InvalidOperationException("[SheetBoard] clip check failed for: " + labels);
                 }
             }
             finally
@@ -205,6 +222,12 @@ namespace SheetBoardDev
             if (field == null) throw new InvalidOperationException("Missing private field: " + name);
             return field.GetValue(target);
         }
+        private static bool IsKnownOverflow(SheetBoardDisplay display, int row, int col)
+        {
+            MethodInfo method = display.GetType().GetMethod("IsKnownOverflow", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            if (method == null) throw new InvalidOperationException("Missing method: IsKnownOverflow");
+            return (bool)method.Invoke(display, new object[] { row, col });
+        }
         private static void PrivateSet(object target, string name, object value)
         {
             FieldInfo field = target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic);
@@ -237,11 +260,187 @@ namespace SheetBoardDev
                 PrivateInvoke(display, "RefreshIndicators", source.GetAccessStatus(), source.IsBusy());
             }
         }
+        private static bool AssertNoClipping(SheetBoardDisplay display, string label)
+        {
+            TMP_Text[] texts = display.tableArea.GetComponentsInChildren<TMP_Text>(false);
+            Vector3[] tableCorners = new Vector3[4];
+            display.tableArea.GetWorldCorners(tableCorners);
+            Vector2 tableMin = new Vector2(float.PositiveInfinity, float.PositiveInfinity);
+            Vector2 tableMax = new Vector2(float.NegativeInfinity, float.NegativeInfinity);
+            for (int i = 0; i < 4; i++)
+            {
+                Vector3 local = display.tableArea.InverseTransformPoint(tableCorners[i]);
+                tableMin = Vector2.Min(tableMin, local);
+                tableMax = Vector2.Max(tableMax, local);
+            }
+            TMP_Text[] columns = PrivateValue(display, "columns") as TMP_Text[];
+            int glyphs = 0;
+            int violations = 0;
+            int exempt = 0;
+            for (int t = 0; t < texts.Length; t++)
+            {
+                TMP_Text text = texts[t];
+                if (text == null || !text.gameObject.activeInHierarchy) continue;
+                int columnIndex = ColumnIndex(columns, text);
+                int overlayRow = -1;
+                int overlayCol = -1;
+                bool isColumn = columnIndex >= 0;
+                if (!isColumn && !OverlayCell(display, text, out overlayRow, out overlayCol))
+                {
+                    overlayRow = -1;
+                    overlayCol = -1;
+                }
+                else if (isColumn)
+                {
+                    overlayRow = -1;
+                    overlayCol = columnIndex;
+                }
+                text.ForceMeshUpdate();
+                TMP_CharacterInfo[] characters = text.textInfo.characterInfo;
+                int characterCount = Math.Min(text.textInfo.characterCount, characters.Length);
+                RectMask2D nearestMask = null;
+                Transform parent = text.transform;
+                while (parent != null && nearestMask == null)
+                {
+                    nearestMask = parent.GetComponent<RectMask2D>();
+                    parent = parent.parent;
+                }
+                Vector2 maskMin = new Vector2(float.NegativeInfinity, float.NegativeInfinity);
+                Vector2 maskMax = new Vector2(float.PositiveInfinity, float.PositiveInfinity);
+                if (nearestMask != null)
+                {
+                    Vector3[] maskCorners = new Vector3[4];
+                    nearestMask.GetComponent<RectTransform>().GetWorldCorners(maskCorners);
+                    maskMin = new Vector2(float.PositiveInfinity, float.PositiveInfinity);
+                    maskMax = new Vector2(float.NegativeInfinity, float.NegativeInfinity);
+                    for (int i = 0; i < 4; i++)
+                    {
+                        Vector3 local = display.tableArea.InverseTransformPoint(maskCorners[i]);
+                        maskMin = Vector2.Min(maskMin, local);
+                        maskMax = Vector2.Max(maskMax, local);
+                    }
+                }
+                Vector3[] glyphCorners = new Vector3[4];
+                for (int k = 0; k < characterCount; k++)
+                {
+                    TMP_CharacterInfo character = characters[k];
+                    if (!character.isVisible) continue;
+                    glyphs++;
+                    glyphCorners[0] = character.bottomLeft;
+                    glyphCorners[1] = character.topLeft;
+                    glyphCorners[2] = character.topRight;
+                    glyphCorners[3] = character.bottomRight;
+                    float left = float.PositiveInfinity;
+                    float right = float.NegativeInfinity;
+                    float bottom = float.PositiveInfinity;
+                    float top = float.NegativeInfinity;
+                    for (int q = 0; q < 4; q++)
+                    {
+                        Vector3 local = display.tableArea.InverseTransformPoint(text.transform.TransformPoint(glyphCorners[q]));
+                        left = Mathf.Min(left, local.x);
+                        right = Mathf.Max(right, local.x);
+                        bottom = Mathf.Min(bottom, local.y);
+                        top = Mathf.Max(top, local.y);
+                    }
+                    float horizontal = Mathf.Max(tableMin.x - left, right - tableMax.x, maskMin.x - left, right - maskMax.x);
+                    float vertical = Mathf.Max(tableMin.y - bottom, top - tableMax.y, maskMin.y - bottom, top - maskMax.y);
+                    int row = isColumn ? character.lineNumber : overlayRow;
+                    int col = isColumn ? columnIndex : overlayCol;
+                    int workRows = (int)PrivateValue(display, "workRows");
+                    int workCols = (int)PrivateValue(display, "workCols");
+                    bool hasCell = row >= 0 && row < workRows && col >= 0 && col < workCols;
+                    bool knownOverflow = hasCell && IsKnownOverflow(display, row, col) && horizontal > 1f;
+                    if (knownOverflow)
+                    {
+                        exempt++;
+                        horizontal = 0f;
+                    }
+                    float horizontalTolerance = (character.style & FontStyles.Italic) != 0 ? Mathf.Max(1f, 0.25f * text.fontSize) : 1f;
+                    float overflow = Mathf.Max(horizontal, vertical);
+                    if (horizontal > horizontalTolerance || vertical > 1f)
+                    {
+                        violations++;
+                        if (violations <= 10)
+                        {
+                            string location = col >= 0 ? ", col=" + (col + 1) : "";
+                            if (hasCell) location += ", row=" + (row + 1);
+                            string cell = hasCell ? CellAt(display, row, col) : "";
+                            string axis = horizontal > horizontalTolerance && vertical > 1f ? "横/縦" : (horizontal > horizontalTolerance ? "横" : "縦");
+                            string characterRect = "(" + left.ToString("0.0") + "," + bottom.ToString("0.0") + ")- (" + right.ToString("0.0") + "," + top.ToString("0.0") + ")";
+                            string maskRect = "(" + maskMin.x.ToString("0.0") + "," + maskMin.y.ToString("0.0") + ")-(" + maskMax.x.ToString("0.0") + "," + maskMax.y.ToString("0.0") + ")";
+                            string tableRect = "(" + tableMin.x.ToString("0.0") + "," + tableMin.y.ToString("0.0") + ")-(" + tableMax.x.ToString("0.0") + "," + tableMax.y.ToString("0.0") + ")";
+                            Debug.LogError("[SheetBoard] clip violation: " + label + ", theme=" + (display.lightTheme ? "light" : "dark") + location + ", cell=\"" + cell + "\", tmp=\"" + text.gameObject.name + "\", character=\"" + character.character + "\", line=" + character.lineNumber + ", axis=" + axis + ", overflow=" + overflow.ToString("0.0") + "px, glyph=" + characterRect + ", mask=" + maskRect + ", table=" + tableRect);
+                        }
+                    }
+                }
+            }
+            if (exempt > 0) Debug.Log("[SheetBoard] " + label + ": exempt " + exempt + " glyphs (known overflow)");
+            if (violations == 0) Debug.Log("[SheetBoard] clip check OK: " + label + " (" + glyphs + " glyphs)");
+            return violations > 0;
+        }
+
+        private static int ColumnIndex(TMP_Text[] columns, TMP_Text text)
+        {
+            if (columns == null) return -1;
+            for (int i = 0; i < columns.Length; i++)
+                if (columns[i] == text) return i;
+            return -1;
+        }
+
+        private static bool OverlayCell(SheetBoardDisplay display, TMP_Text text, out int row, out int col)
+        {
+            row = -1;
+            col = -1;
+            Transform current = text.transform;
+            while (current.parent != null && current.parent != display.tableArea) current = current.parent;
+            if (current.parent != display.tableArea) return false;
+            RectTransform frame = current as RectTransform;
+            if (frame == null) return false;
+            float[] xs = PrivateValue(display, "workXs") as float[];
+            float[] ys = PrivateValue(display, "workYs") as float[];
+            if (xs == null || ys == null) return false;
+            float x = frame.anchoredPosition.x - OverlayPadding;
+            float y = -frame.anchoredPosition.y;
+            float bestX = float.PositiveInfinity;
+            float bestY = float.PositiveInfinity;
+            for (int i = 0; i < xs.Length; i++)
+            {
+                float distance = Mathf.Abs(xs[i] - x);
+                if (distance < bestX)
+                {
+                    bestX = distance;
+                    col = i;
+                }
+            }
+            for (int i = 0; i < ys.Length; i++)
+            {
+                float distance = Mathf.Abs(ys[i] - y);
+                if (distance < bestY)
+                {
+                    bestY = distance;
+                    row = i;
+                }
+            }
+            if (bestX > 1f) col = -1;
+            if (bestY > 1f) row = -1;
+            return row >= 0 || col >= 0;
+        }
+
+        private static string CellAt(SheetBoardDisplay display, int row, int col)
+        {
+            string[] raw = PrivateValue(display, "workRaw") as string[];
+            int cols = (int)PrivateValue(display, "workCols");
+            int index = row * cols + col;
+            return raw != null && index >= 0 && index < raw.Length ? raw[index] : "";
+        }
+
         private static void RenderRange(SheetBoardDisplay display, SheetBoardSource source, string range, string path, Camera camera, RenderTexture renderTexture, Texture2D image)
         {
             display.rangeName = range;
             Canvas.ForceUpdateCanvases();
             display.RenderNow();
+            string label = range + "/" + (display.lightTheme ? "light" : "dark");
+            if (AssertNoClipping(display, label) && !failedClipLabels.Contains(label)) failedClipLabels.Add(label);
             // _Watch drives the status line at runtime; it schedules Udon events, so mirror it here.
             display.statusText.text = source.GetStatusText();
             Canvas.ForceUpdateCanvases();

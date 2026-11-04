@@ -24,6 +24,7 @@ namespace SheetBoard
         public float nearCheckInterval = 1f;
         public float maxRowHeight = 64f;
         public float textScale = 1.4f;
+        public bool autoFitColumns = true;
         public float columnGap = 12f;
         [Header("Colours")]
         public Color boardColor, bodyColor, gridColor, headerBackgroundColor, zebraColor, normalColor, staleColor, errorColor, busyColor;
@@ -47,6 +48,7 @@ namespace SheetBoard
         private const float MinFontFactor = 0.6f, MaxFontFactor = 1.6f;
         private const int MinMeasuredColumnWidth = 2, MaxMeasuredColumnWidth = 40;
         private const float FitFontWidthFactor = 0.55f, DefaultCellHeightFactor = 0.62f, VerticalOffsetFactor = 0.78f;
+        private const float RowFitRatio = 0.70f, MinFontRatio = 0.5f, BoldFactor = 1.06f, SafetyMargin = 1.05f, SpacerEm = 0.6f;
         private const int MaxFontSizeKinds = 16;
         private const float DefaultBodyRed = 0x20 / 255f, DefaultBodyGreen = 0x21 / 255f, DefaultBodyBlue = 0x24 / 255f;
         private float nextWatchAt;
@@ -81,7 +83,7 @@ namespace SheetBoard
         private int[] workAscii, workOther, workBits, workAlignment, workSpanRows, workSpanCols, workLongest;
         private float[] workPt;
         private Color[] workFg, workBg;
-        private bool[] workHasFg, workHasBg, workWrapping, workCovered, workOverlayUsed;
+        private bool[] workHasFg, workHasBg, workWrapping, workCovered, workOverlayUsed, workSpillCandidates;
         private bool overlayPoolUnavailable;
         private bool overlayNoWrapPoolUnavailable;
 
@@ -434,14 +436,15 @@ namespace SheetBoard
             workWrapping = new bool[nr * nc];
             workCovered = new bool[nr * nc];
             workOverlayUsed = new bool[nr * nc];
+            workSpillCandidates = new bool[nr * nc];
             workSpanRows = new int[nr * nc];
             workSpanCols = new int[nr * nc];
             workLongest = new int[nc];
             workHeader = header;
             CollectCellData(rows, sizes, align, ha, bold, styles, colors, backgrounds, wrap);
-            CalculateLayout(widths, colw, rowh, sizes);
             workMerges = merges;
             ApplyMerges();
+            CalculateLayout(widths, colw, rowh, sizes);
             DrawCellsAndOverlays();
             DrawColumns();
             displayedSource = source; displayedRevision = source.GetRevision();
@@ -501,6 +504,13 @@ namespace SheetBoard
             }
         }
 
+        private float EmWidth(int i)
+        {
+            float size = workPt[i] > 0f && workBasePt > 0f ? FontFactor(workPt[i], workBasePt) : 1f;
+            bool bold = (workBits[i] & 1) != 0 || (workHeader && i / workCols == 0);
+            return (workAscii[i] * FitFontWidthFactor + workOther[i]) * size * (bold ? BoldFactor : 1f) * SafetyMargin;
+        }
+
         private void CalculateLayout(DataList widths, DataList colw, DataList rowh, DataList sizes)
         {
             workXs = new float[workCols];
@@ -509,41 +519,14 @@ namespace SheetBoard
             workHs = new float[workRows];
             float[] sorted = new float[Mathf.Max(workRows, workCols)];
             int valid = 0;
-            DataList weightList = widths != null ? widths : colw;
-            bool useColw = widths == null && colw != null;
-            for (int c = 0; c < workCols; c++)
-            {
-                float v = weightList == null ? Mathf.Clamp(workLongest[c], MinMeasuredColumnWidth, MaxMeasuredColumnWidth) : (c < weightList.Count ? (float)Number(weightList[c]) : 0f);
-                workWs[c] = v;
-                if (v > 0f) sorted[valid++] = v;
-            }
-            float fallback = Median(sorted, valid, useColw ? 100f : 1f);
-            float total = 0f;
-            for (int c = 0; c < workCols; c++)
-            {
-                if (workWs[c] <= 0f) workWs[c] = fallback;
-                total += workWs[c];
-            }
-            float gap = showGrid || useColw ? 0f : columnGap;
-            float available = Mathf.Max(0f, tableArea.rect.width - gap * (workCols - 1));
-            float cumulative = 0f;
-            for (int c = 0; c < workCols; c++)
-            {
-                float start = Mathf.Round(cumulative + c * gap);
-                cumulative += available * workWs[c] / total;
-                float end = Mathf.Round(cumulative + c * gap);
-                workXs[c] = start;
-                workWs[c] = end - start;
-            }
-            valid = 0;
             for (int r = 0; r < workRows; r++)
             {
                 float v = rowh == null ? 1f : (r < rowh.Count ? (float)Number(rowh[r]) : 0f);
                 workHs[r] = v;
                 if (v > 0f) sorted[valid++] = v;
             }
-            fallback = Median(sorted, valid, rowh == null ? 1f : 21f);
-            total = 0f;
+            float fallback = Median(sorted, valid, rowh == null ? 1f : 21f);
+            float total = 0f;
             for (int r = 0; r < workRows; r++)
             {
                 if (workHs[r] <= 0f) workHs[r] = fallback;
@@ -552,7 +535,7 @@ namespace SheetBoard
             }
             float median = Median(sorted, workRows, fallback);
             float scale = Mathf.Min(tableArea.rect.height / total, maxRowHeight / median);
-            cumulative = 0f;
+            float cumulative = 0f;
             for (int r = 0; r < workRows; r++)
             {
                 workYs[r] = Mathf.Round(cumulative);
@@ -562,9 +545,191 @@ namespace SheetBoard
             }
             workHeightAll = Mathf.Round(cumulative);
             float medianHeight = Median(sorted, workRows, 0f);
-            workBasePx = sizes != null && rowh != null && workBasePt > 0f ? workBasePt * (4f / 3f) * scale * Mathf.Clamp(textScale, 0.5f, 3f) : medianHeight * DefaultCellHeightFactor * Mathf.Clamp(textScale, 0.5f, 3f) / DefaultTextScale;
+            float preferred = sizes != null && rowh != null && workBasePt > 0f ? workBasePt * (4f / 3f) * scale * Mathf.Clamp(textScale, 0.5f, 3f) : medianHeight * DefaultCellHeightFactor * Mathf.Clamp(textScale, 0.5f, 3f) / DefaultTextScale;
+            float rowLimit = RowFitRatio * medianHeight;
+            float upper = Mathf.Min(preferred, rowLimit);
+
+            float[] needEm = new float[workCols];
+            bool[] emptyColumn = new bool[workCols];
+            workSpillCandidates = new bool[workRows * workCols];
+            int nonEmpty = 0;
+            float sumNeedEm = 0f;
+            for (int c = 0; c < workCols; c++)
+            {
+                float need = 0f;
+                for (int r = 0; r < workRows; r++)
+                {
+                    int i = r * workCols + c;
+                    if (workCovered[i] || workSpanRows[i] > 0 || workWrapping[i] || workRaw[i].Contains("\n") || workRaw[i].Contains("\r")) continue;
+                    if (workAlignment[i] == 0 && c + 1 < workCols)
+                    {
+                        int end = c + 1;
+                        while (end < workCols)
+                        {
+                            int right = r * workCols + end;
+                            if (workRaw[right] != "" || workHasBg[right] || workCovered[right] || workSpanRows[right] > 0) break;
+                            end++;
+                        }
+                        if (end == workCols)
+                        {
+                            workSpillCandidates[i] = true;
+                            continue;
+                        }
+                    }
+                    need = Mathf.Max(need, EmWidth(i));
+                }
+                if (need <= 0f)
+                {
+                    emptyColumn[c] = true;
+                    needEm[c] = SpacerEm;
+                }
+                else
+                {
+                    needEm[c] = need;
+                    nonEmpty++;
+                    sumNeedEm += need;
+                }
+            }
+
+            bool autoLayout = autoFitColumns && widths == null;
+            bool manualWidths = widths != null;
+            DataList weightList = manualWidths ? widths : colw;
+            bool useColw = !manualWidths && colw != null;
+            float gap = autoLayout ? (showGrid ? 0f : columnGap) : (showGrid || useColw ? 0f : columnGap);
+            float tableWidth = tableArea.rect.width;
+            float available = Mathf.Max(0f, tableWidth - gap * (workCols - 1));
+            float horizontalLimit = preferred;
+            if (autoLayout)
+            {
+                horizontalLimit = sumNeedEm > 0f ? Mathf.Max(0f, (available - nonEmpty * 2f * Padding) / sumNeedEm) : preferred;
+                float tableConstraint = tableWidth - gap * (workCols - 1);
+                for (int r = 0; r < workRows; r++)
+                {
+                    for (int c = 0; c < workCols; c++)
+                    {
+                        int i = r * workCols + c;
+                        if (!workSpillCandidates[i]) continue;
+                        float leftNeed = EmWidth(i);
+                        int leftNonEmpty = 0;
+                        for (int k = 0; k < c; k++)
+                        {
+                            leftNeed += needEm[k];
+                            if (!emptyColumn[k]) leftNonEmpty++;
+                        }
+                        float widthLimit = tableConstraint - 2f * Padding * (leftNonEmpty + 1);
+                        if (leftNeed > 0f) horizontalLimit = Mathf.Min(horizontalLimit, Mathf.Max(0f, widthLimit / leftNeed));
+                    }
+                }
+            }
+            else if (manualWidths)
+            {
+                float fw = MedianFromList(widths, 1f);
+                float weightTotal = 0f;
+                for (int c = 0; c < workCols; c++)
+                {
+                    float w = c < widths.Count ? (float)Number(widths[c]) : 0f;
+                    if (w <= 0f) w = fw;
+                    weightTotal += w;
+                }
+                for (int c = 0; c < workCols; c++)
+                {
+                    float w = c < widths.Count ? (float)Number(widths[c]) : 0f;
+                    if (w <= 0f) w = fw;
+                    float colWidth = weightTotal > 0f ? available * w / weightTotal : available / workCols;
+                    if (!emptyColumn[c] && needEm[c] > 0f) horizontalLimit = Mathf.Min(horizontalLimit, Mathf.Max(0f, colWidth - 2f * Padding) / needEm[c]);
+                }
+            }
+            float minimum = MinFontRatio * Mathf.Min(preferred, rowLimit);
+            workBasePx = Mathf.Max(minimum, Mathf.Min(upper, horizontalLimit));
+
+            float[] weights = new float[workCols];
+            float weightFallback = 1f;
+            if (weightList != null)
+            {
+                valid = 0;
+                for (int c = 0; c < workCols; c++)
+                {
+                    float v = c < weightList.Count ? (float)Number(weightList[c]) : 0f;
+                    if (v > 0f) sorted[valid++] = v;
+                }
+                weightFallback = Median(sorted, valid, useColw ? 100f : 1f);
+            }
+            total = 0f;
+            for (int c = 0; c < workCols; c++)
+            {
+                float v;
+                if (autoLayout)
+                {
+                    v = colw != null ? (c < colw.Count ? (float)Number(colw[c]) : 0f) : needEm[c];
+                }
+                else
+                {
+                    v = weightList == null ? Mathf.Clamp(workLongest[c], MinMeasuredColumnWidth, MaxMeasuredColumnWidth) : (c < weightList.Count ? (float)Number(weightList[c]) : 0f);
+                }
+                if (v <= 0f) v = weightFallback;
+                weights[c] = v;
+                total += v;
+            }
+            if (autoLayout)
+            {
+                float[] minimumWidths = new float[workCols];
+                float sumMinimum = 0f;
+                for (int c = 0; c < workCols; c++)
+                {
+                    minimumWidths[c] = needEm[c] * workBasePx + (emptyColumn[c] ? 0f : 2f * Padding);
+                    sumMinimum += minimumWidths[c];
+                }
+                float extra = available - sumMinimum;
+                cumulative = 0f;
+                for (int c = 0; c < workCols; c++)
+                {
+                    float width;
+                    if (extra >= 0f) width = minimumWidths[c] + extra * weights[c] / total;
+                    else width = sumMinimum > 0f ? minimumWidths[c] * available / sumMinimum : available / workCols;
+                    float start = Mathf.Round(cumulative + c * gap);
+                    cumulative += width;
+                    float end = Mathf.Round(cumulative + c * gap);
+                    workXs[c] = start;
+                    workWs[c] = end - start;
+                }
+            }
+            else
+            {
+                cumulative = 0f;
+                for (int c = 0; c < workCols; c++)
+                {
+                    float start = Mathf.Round(cumulative + c * gap);
+                    cumulative += available * weights[c] / total;
+                    float end = Mathf.Round(cumulative + c * gap);
+                    workXs[c] = start;
+                    workWs[c] = end - start;
+                }
+            }
         }
 
+        internal bool IsKnownOverflow(int row, int col)
+        {
+            if (row < 0 || row >= workRows || col < 0 || col >= workCols) return false;
+            if (workRaw == null || workCovered == null || workOverlayUsed == null || workXs == null || workWs == null) return false;
+            int i = row * workCols + col;
+            if (workCovered[i] || workRaw[i] == "") return false;
+            if (workWrapping[i] || workRaw[i].Contains("\n") || workRaw[i].Contains("\r")) return false;
+            if (workOverlayUsed[i]) return workSpillCandidates != null && workSpillCandidates[i] && EmWidth(i) * workBasePx > tableArea.rect.width - workXs[col] - 2f * Padding;
+            return EmWidth(i) * workBasePx > workWs[col] - 2f * Padding;
+        }
+
+        private float MedianFromList(DataList list, float fallback)
+        {
+            if (list == null) return fallback;
+            float[] values = new float[list.Count];
+            int count = 0;
+            for (int i = 0; i < list.Count; i++)
+            {
+                float value = (float)Number(list[i]);
+                if (value > 0f) values[count++] = value;
+            }
+            return Median(values, count, fallback);
+        }
         private void ApplyMerges()
         {
             if (workMerges != null) for (int i = 0; i < workMerges.Count; i++)
@@ -636,8 +801,7 @@ namespace SheetBoard
                     int kind = workSpanRows[i] > 0 ? 1 : (workWrapping[i] || workRaw[i].Contains("\n") || workRaw[i].Contains("\r") ? 2 : 0);
                     if (kind == 0 && workAlignment[i] == 0 && workRaw[i].Length > 0)
                     {
-                        float font = workBasePx * (workPt[i] > 0f && workBasePt > 0f ? FontFactor(workPt[i], workBasePt) : 1f);
-                        if (workAscii[i] * font * FitFontWidthFactor + workOther[i] * font > workWs[c] - 2f * Padding)
+                        if (EmWidth(i) * workBasePx > workWs[c] - 2f * Padding)
                         {
                             int end = c + 1;
                             while (end < workCols && workRaw[r * workCols + end] == "" && !workHasBg[r * workCols + end] && !workCovered[r * workCols + end] && workSpanRows[r * workCols + end] == 0) end++;

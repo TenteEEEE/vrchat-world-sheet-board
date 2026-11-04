@@ -4,6 +4,13 @@ All notable changes to this package are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-04
+
+### Changed
+
+- Displays automatically fit column widths and text to the table area so headings and cells are no longer clipped; manual column ratios are still supported and keep their ratios while text shrinks to fit.
+- The new Display option `autoFitColumns` (**列幅を自動調整**) is on by default, so existing boards re-layout after upgrading. Turn it off on a Display to keep the previous column widths.
+
 ## [0.1.1] - 2026-11-04
 
 ### Added
