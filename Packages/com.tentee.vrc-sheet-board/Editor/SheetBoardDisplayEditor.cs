@@ -93,6 +93,10 @@ namespace SheetBoardEditor
                 Draw("staleColor");
                 Draw("errorColor");
                 Draw("busyColor");
+                Draw("refreshButtonColor");
+                Draw("refreshLabelColor");
+                Draw("refreshDisabledColor");
+                Draw("refreshDisabledLabelColor");
             }
             showTexts = EditorGUILayout.Foldout(showTexts, "文言（任意）", true);
             if (showTexts)
@@ -100,7 +104,6 @@ namespace SheetBoardEditor
                 Draw("rangeMissingText");
                 Draw("sourceMissingText");
                 Draw("refreshIdleText");
-                Draw("refreshBusyText");
             }
             showAdvanced = EditorGUILayout.Foldout(showAdvanced, "詳細設定", true);
             if (showAdvanced)
@@ -203,7 +206,6 @@ namespace SheetBoardEditor
                 case "refreshButton": return new GUIContent("更新ボタン");
                 case "refreshLabel": return new GUIContent("更新ボタンの文字");
                 case "refreshIdleText": return new GUIContent("更新ボタンの文言");
-                case "refreshBusyText": return new GUIContent("更新中のボタンの文言");
                 case "rangeMissingText": return new GUIContent("範囲が見つからないとき");
                 case "sourceMissingText": return new GUIContent("Source がないとき");
                 case "bodyColor": return new GUIContent("本文の色");
@@ -213,6 +215,10 @@ namespace SheetBoardEditor
                 case "staleColor": return new GUIContent("古い状態の色");
                 case "errorColor": return new GUIContent("エラーの色");
                 case "busyColor": return new GUIContent("更新中のランプ色");
+                case "refreshButtonColor": return new GUIContent("更新ボタンの色");
+                case "refreshLabelColor": return new GUIContent("更新ボタンの文字色");
+                case "refreshDisabledColor": return new GUIContent("押せない間のボタン色");
+                case "refreshDisabledLabelColor": return new GUIContent("押せない間の文字色");
                 default: return new GUIContent(name);
             }
         }

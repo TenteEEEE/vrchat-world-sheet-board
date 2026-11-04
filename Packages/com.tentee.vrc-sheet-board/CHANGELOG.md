@@ -4,6 +4,14 @@ All notable changes to this package are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-04
+
+### Changed
+
+- Kept the refresh button label unchanged while fetching and indicated its disabled state with disabled colours; removed Display `refreshBusyText`.
+- Reduced the default manual refresh cooldown from 30 seconds to 5 seconds, matching VRChat String Loading's limit of one request per five seconds.
+- Updated the default refresh button and status lamp colours for readable contrast in both themes.
+
 ## [0.2.0] - 2026-11-04
 
 ### Changed

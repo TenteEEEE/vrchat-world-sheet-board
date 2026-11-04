@@ -50,19 +50,29 @@ namespace SheetBoardEditor
             text.raycastTarget = false;
             return text;
         }
-        private static Button CreateButton(Transform parent, TMP_FontAsset font)
+        private static Button CreateButton(Transform parent, TMP_FontAsset font, bool lightTheme)
         {
             GameObject obj = new GameObject("RefreshButton", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
             obj.transform.SetParent(parent, false);
             Image image = obj.GetComponent<Image>();
-            image.color = new Color32(0x2E, 0xD3, 0xC6, 0xFF);
+            image.color = lightTheme ? new Color32(0x0F, 0x76, 0x6E, 0xFF) : new Color32(0x1F, 0x6F, 0x69, 0xFF);
             image.raycastTarget = true;
             Button button = obj.GetComponent<Button>();
             button.targetGraphic = image;
+            ColorBlock colors = button.colors;
+            colors.normalColor = Color.white;
+            colors.highlightedColor = new Color(0.92f, 0.92f, 0.92f, 1f);
+            colors.pressedColor = new Color(0.80f, 0.80f, 0.80f, 1f);
+            colors.selectedColor = Color.white;
+            colors.disabledColor = Color.white;
+            colors.colorMultiplier = 1f;
+            colors.fadeDuration = 0.1f;
+            button.colors = colors;
             Navigation navigation = button.navigation;
             navigation.mode = Navigation.Mode.None;
             button.navigation = navigation;
             TextMeshProUGUI label = CreateText(obj.transform, "Label", 28f, font, TextAlignmentOptions.Center);
+            label.color = lightTheme ? new Color32(0xFF, 0xFF, 0xFF, 0xFF) : new Color32(0xF1, 0xF5, 0xF7, 0xFF);
             label.text = "更新";
             SetEdges(label.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
             return button;

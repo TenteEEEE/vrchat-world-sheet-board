@@ -58,7 +58,7 @@ public string baseUrl = "";            // 運用者が貼る URL。実行時は�
 public float refreshInterval = 60f;    // 秒。実効値は max(30, この値)
 public float nearRadius = 0f;          // メートル。0 = 距離に関係なく更新する
 public float staleMinutes = 90f;       // 生存通知がこの時間途絶えたら「止まっています」
-public float manualCooldown = 30f;     // 手動更新のクールダウン（秒）
+public float manualCooldown = 5f;      // 手動更新のクールダウン（秒、既定 5）
 public float startDelayMax = 3f;       // 初回取得をランダムに遅らせる上限（秒）
 // 状態行の文言（§3.6）
 public SheetBoardAudience audience = SheetBoardAudience.Public; // 全員 / 協力者以上 / 管理者のみ
@@ -170,11 +170,10 @@ public float columnGap = 12f;          // px。showGrid が OFF かつ colw を�
 public int maxOverlays = 24;           // プールごと
 public float nearCheckInterval = 1f;   // 秒。0.25〜1.5 にクランプ
 // 色（α 0 なら lightTheme に応じた既定値で埋める）
-public Color boardColor, bodyColor, gridColor, headerBackgroundColor, zebraColor, normalColor, staleColor, errorColor, busyColor;
+public Color boardColor, bodyColor, gridColor, headerBackgroundColor, zebraColor, normalColor, staleColor, errorColor, busyColor, refreshButtonColor, refreshLabelColor, refreshDisabledColor, refreshDisabledLabelColor;
 public string rangeMissingText = "範囲「{name}」が見つかりません";
 public string sourceMissingText = "Sourceが設定されていません";
 public string refreshIdleText = "更新";
-public string refreshBusyText = "更新中…";
 // installer が配線する内部参照（[Header] で区切る）
 public Image background;
 public TMP_Text titleText, statusText;
@@ -193,10 +192,16 @@ Display Inspector では `rangeMissingText` と `sourceMissingText` を含むす
 | boardColor | `#FFFFFF` | `#12161C` |
 | bodyColor | `#202124` | `#E8EDF2` |
 | gridColor | `#E2E3E3` | `#FFFFFF` α 0.08 |
-| headerBackgroundColor | `#2ED3C6` α 0.18 | 同左 |
+| headerBackgroundColor | `#0F766E` α 0.08 | `#5EC4BA` α 0.12 |
 | zebraColor | `#000000` α 0.025 | `#FFFFFF` α 0.015 |
-| normal / stale / error | `#4CAF50` / `#FFB300` / `#E53935` | 同左 |
-| busy | `#2196F3` | 同左 |
+| normalColor | `#1E8E3E` | `#81C995` |
+| staleColor | `#B06000` | `#FDD663` |
+| errorColor | `#D93025` | `#F28B82` |
+| busyColor | `#1A73E8` | `#8AB4F8` |
+| refreshButtonColor | `#0F766E` | `#1F6F69` |
+| refreshLabelColor | `#FFFFFF` | `#F1F5F7` |
+| refreshDisabledColor | `#E3E6E8` | `#252B33` |
+| refreshDisabledLabelColor | `#56616B` | `#8B96A1` |
 
 ### 4.2 描画の構造
 
@@ -288,7 +293,7 @@ Display Inspector では `rangeMissingText` と `sourceMissingText` を含むす
 
 ボタンの onClick は Display の `OnRefreshPressed()` を呼び、Display が `source.RequestRefresh()` を呼ぶ。押した直後にも状態行・ランプ・ボタン表示を更新する。
 
-取得中と手動更新のクールダウン中は `GetRefreshWaitSeconds()` に従ってボタンを無効化する。ラベルは busy 中に `refreshBusyText`、それ以外に `refreshIdleText` を表示する。
+取得中と手動更新のクールダウン中は `GetRefreshWaitSeconds()` に従ってボタンを無効化する。ラベルは常に `refreshIdleText` を表示する。押せない間はボタンの塗りと文字色で示す。ボタンの ColorBlock の disabled は白で、無効時の色に乗算による減衰を加えない。
 
 ## 5. JSON 形式 `sheetboard/1`
 

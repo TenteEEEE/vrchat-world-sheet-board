@@ -29,7 +29,7 @@ namespace SheetBoard
         public float refreshInterval = 60f;
         public float nearRadius = 0f;
         public float staleMinutes = 90f;
-        public float manualCooldown = 30f;
+        public float manualCooldown = 5f;
         public float startDelayMax = 3f;
         public SheetBoardAudience audience = SheetBoardAudience.Public;
         public UdonBehaviour permissionController;

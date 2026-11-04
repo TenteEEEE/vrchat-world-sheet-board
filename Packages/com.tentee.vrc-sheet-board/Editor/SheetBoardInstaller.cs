@@ -91,12 +91,12 @@ namespace SheetBoardEditor
             display.cellTemplate = CreateImage(table.transform, "CellTemplate", Color.white);
             SetEdges(display.cellTemplate.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
             display.cellTemplate.gameObject.SetActive(false);
-            display.statusDot = CreateImage(canvas.transform, "StatusDot", new Color32(0xE5, 0x39, 0x35, 0xFF));
+            display.statusDot = CreateImage(canvas.transform, "StatusDot", lightTheme ? new Color32(0xD9, 0x30, 0x25, 0xFF) : new Color32(0xF2, 0x8B, 0x82, 0xFF));
             SetEdges(display.statusDot.rectTransform, Vector2.zero, Vector2.zero, new Vector2(40, 28), new Vector2(60, 48));
             display.statusText = CreateText(canvas.transform, "Status", 28f, font, TextAlignmentOptions.MidlineLeft);
             display.statusText.color = display.titleText.color;
             SetEdges(display.statusText.rectTransform, Vector2.zero, new Vector2(1, 0), new Vector2(75, 10), new Vector2(-250, 70));
-            Button button = CreateButton(canvas.transform, font);
+            Button button = CreateButton(canvas.transform, font, lightTheme);
             display.refreshButton = button;
             display.refreshLabel = button.GetComponentInChildren<TMP_Text>();
             SetEdges(button.GetComponent<RectTransform>(), new Vector2(1, 0), new Vector2(1, 0), new Vector2(-220, 15), new Vector2(-40, 65));

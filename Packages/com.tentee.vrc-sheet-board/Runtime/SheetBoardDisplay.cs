@@ -27,12 +27,11 @@ namespace SheetBoard
         public bool autoFitColumns = true;
         public float columnGap = 12f;
         [Header("Colours")]
-        public Color boardColor, bodyColor, gridColor, headerBackgroundColor, zebraColor, normalColor, staleColor, errorColor, busyColor;
+        public Color boardColor, bodyColor, gridColor, headerBackgroundColor, zebraColor, normalColor, staleColor, errorColor, busyColor, refreshButtonColor, refreshLabelColor, refreshDisabledColor, refreshDisabledLabelColor;
         [Header("Texts")]
         public string rangeMissingText = "範囲「{name}」が見つかりません";
         public string sourceMissingText = "Sourceが設定されていません";
         public string refreshIdleText = "更新";
-        public string refreshBusyText = "更新中…";
 
         [Header("Internal references (installer-wired)")]
         public Image background;
@@ -84,6 +83,7 @@ namespace SheetBoard
         private float[] workPt;
         private Color[] workFg, workBg;
         private bool[] workHasFg, workHasBg, workWrapping, workCovered, workOverlayUsed, workSpillCandidates;
+        private Image refreshButtonImage;
         private bool overlayPoolUnavailable;
         private bool overlayNoWrapPoolUnavailable;
 
@@ -94,17 +94,22 @@ namespace SheetBoard
             if (boardColor.a <= 0f) boardColor = lightTheme ? Color.white : new Color(0x12 / 255f, 0x16 / 255f, 0x1C / 255f, 1f);
             if (bodyColor.a <= 0f) bodyColor = lightTheme ? new Color(DefaultBodyRed, DefaultBodyGreen, DefaultBodyBlue, 1f) : new Color(0xE8 / 255f, 0xED / 255f, 0xF2 / 255f, 1f);
             if (gridColor.a <= 0f) gridColor = lightTheme ? new Color(0xE2 / 255f, 0xE3 / 255f, 0xE3 / 255f, 1f) : new Color(1f, 1f, 1f, 0.08f);
-            if (headerBackgroundColor.a <= 0f) headerBackgroundColor = new Color(0x2E / 255f, 0xD3 / 255f, 0xC6 / 255f, 0.18f);
+            if (headerBackgroundColor.a <= 0f) headerBackgroundColor = lightTheme ? new Color(0x0F / 255f, 0x76 / 255f, 0x6E / 255f, 0.08f) : new Color(0x5E / 255f, 0xC4 / 255f, 0xBA / 255f, 0.12f);
             if (zebraColor.a <= 0f) zebraColor = lightTheme ? new Color(0f, 0f, 0f, 0.025f) : new Color(1f, 1f, 1f, 0.015f);
-            if (normalColor.a <= 0f) normalColor = new Color(0x4C / 255f, 0xAF / 255f, 0x50 / 255f, 1f);
-            if (staleColor.a <= 0f) staleColor = new Color(1f, 0xB3 / 255f, 0f, 1f);
-            if (errorColor.a <= 0f) errorColor = new Color(0xE5 / 255f, 0x39 / 255f, 0x35 / 255f, 1f);
-            if (busyColor.a <= 0f) busyColor = new Color32(0x21, 0x96, 0xF3, 0xFF);
+            if (normalColor.a <= 0f) normalColor = lightTheme ? new Color(0x1E / 255f, 0x8E / 255f, 0x3E / 255f, 1f) : new Color(0x81 / 255f, 0xC9 / 255f, 0x95 / 255f, 1f);
+            if (staleColor.a <= 0f) staleColor = lightTheme ? new Color(0xB0 / 255f, 0x60 / 255f, 0x00 / 255f, 1f) : new Color(0xFD / 255f, 0xD6 / 255f, 0x63 / 255f, 1f);
+            if (errorColor.a <= 0f) errorColor = lightTheme ? new Color(0xD9 / 255f, 0x30 / 255f, 0x25 / 255f, 1f) : new Color(0xF2 / 255f, 0x8B / 255f, 0x82 / 255f, 1f);
+            if (busyColor.a <= 0f) busyColor = lightTheme ? new Color(0x1A / 255f, 0x73 / 255f, 0xE8 / 255f, 1f) : new Color(0x8A / 255f, 0xB4 / 255f, 0xF8 / 255f, 1f);
+            if (refreshButtonColor.a <= 0f) refreshButtonColor = lightTheme ? new Color(0x0F / 255f, 0x76 / 255f, 0x6E / 255f, 1f) : new Color(0x1F / 255f, 0x6F / 255f, 0x69 / 255f, 1f);
+            if (refreshLabelColor.a <= 0f) refreshLabelColor = lightTheme ? new Color(0xFF / 255f, 0xFF / 255f, 0xFF / 255f, 1f) : new Color(0xF1 / 255f, 0xF5 / 255f, 0xF7 / 255f, 1f);
+            if (refreshDisabledColor.a <= 0f) refreshDisabledColor = lightTheme ? new Color(0xE3 / 255f, 0xE6 / 255f, 0xE8 / 255f, 1f) : new Color(0x25 / 255f, 0x2B / 255f, 0x33 / 255f, 1f);
+            if (refreshDisabledLabelColor.a <= 0f) refreshDisabledLabelColor = lightTheme ? new Color(0x56 / 255f, 0x61 / 255f, 0x6B / 255f, 1f) : new Color(0x8B / 255f, 0x96 / 255f, 0xA1 / 255f, 1f);
         }
 
         private void OnEnable()
         {
             if (refreshButton == null) refreshButton = GetComponentInChildren<Button>();
+            if (refreshButton != null) refreshButtonImage = refreshButton.GetComponent<Image>();
             if (refreshLabel == null && refreshButton != null) refreshLabel = refreshButton.GetComponentInChildren<TMP_Text>();
             int access = source == null ? 2 : source.GetAccessStatus();
             bool busy = source != null && access == 0 && source.IsBusy();
@@ -176,10 +181,17 @@ namespace SheetBoard
 
         private void UpdateRefreshButton(int access, bool busy)
         {
-            if (refreshButton != null) refreshButton.interactable = source != null && access == 0 && source.GetRefreshWaitSeconds() == 0f;
+            InitColors();
+            if (refreshButtonImage == null && refreshButton != null) refreshButtonImage = refreshButton.GetComponent<Image>();
+            bool interactable = source != null && access == 0 && source.GetRefreshWaitSeconds() == 0f;
+            if (refreshButton != null) refreshButton.interactable = interactable;
+            Color buttonColor = interactable ? refreshButtonColor : refreshDisabledColor;
+            if (refreshButtonImage != null && refreshButtonImage.color != buttonColor) refreshButtonImage.color = buttonColor;
             if (refreshLabel != null)
             {
-                string label = busy ? refreshBusyText : refreshIdleText;
+                Color labelColor = interactable ? refreshLabelColor : refreshDisabledLabelColor;
+                if (refreshLabel.color != labelColor) refreshLabel.color = labelColor;
+                string label = refreshIdleText;
                 if (refreshLabel.text != label) refreshLabel.text = label;
             }
         }
