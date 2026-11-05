@@ -14,6 +14,7 @@ const HEARTBEAT_MINUTES = 60;
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const MAX_STATUS_ITEM_CHARS = 120;
 const MAX_STATUS_JSON_CHARS = 8000;
+const MAX_CHIP_SOURCE_CELLS = 500;
 function trimEmpty(values, layers) {
   layers = layers || {};
   values = values || [];
@@ -126,6 +127,27 @@ function normalizeColor_(hex, excluded) {
 function normalizeColor(hex) { return normalizeColor_(hex, '#000000'); }
 function normalizeBackground_(hex) { return normalizeColor_(hex, '#FFFFFF'); }
 
+function chipSwatch(displayValues, backgrounds, fontColors, value) {
+  const target = String(value).trim();
+  for (let r = 0; r < (displayValues || []).length; r++) {
+    const displayRow = displayValues[r] || [];
+    for (let c = 0; c < displayRow.length; c++) {
+      if (String(displayRow[c]).trim() !== target) continue;
+      const bg = backgrounds && backgrounds[r] ? backgrounds[r][c] : '';
+      const fg = fontColors && fontColors[r] ? fontColors[r][c] : '';
+      return {bg: normalizeBackground_(bg), fg: normalizeColor(fg)};
+    }
+  }
+  return null;
+}
+
+function chipCode(value, showDropdown, swatch) {
+  if (showDropdown === false) return '';
+  if (value === '' || value === null || value === undefined) return 'a';
+  if (!swatch || (!swatch.bg && !swatch.fg)) return 'c';
+  return 'c|' + (swatch.bg || '') + '|' + (swatch.fg || '');
+}
+
 function overallStatus_() {
   const props = PropertiesService.getDocumentProperties();
   const outcome = props.getProperty('lastPublishOutcome');
@@ -207,7 +229,7 @@ function buildRangePayload(values, colors, options) {
   options = options || {};
   const extra = options.extra || {};
   const layers = {colors: colors};
-  ['styles', 'sizes', 'bg', 'ha', 'wrap'].forEach(key => {
+  ['styles', 'sizes', 'bg', 'ha', 'wrap', 'chips'].forEach(key => {
     if (Object.prototype.hasOwnProperty.call(extra, key)) layers[key] = extra[key];
   });
   const trimmed = trimEmpty(values, layers);
@@ -241,6 +263,10 @@ function buildRangePayload(values, colors, options) {
       if (pair[1] === 'size' || !isDefault) payload[pair[1]] = layer;
     }
   });
+  if (Object.prototype.hasOwnProperty.call(extra, 'chips')) {
+    const layer = rows.map((row, r) => row.map((_, c) => trimmed.layers.chips[r][c]));
+    if (layer.some(row => row.some(value => value !== ''))) payload.chip = layer;
+  }
   const width = rows.length ? rows[0].length : 0;
   if (Object.prototype.hasOwnProperty.call(extra, 'colw')) payload.colw = extra.colw.slice(0, width);
   if (Object.prototype.hasOwnProperty.call(extra, 'rowh')) payload.rowh = extra.rowh.slice(0, rows.length);
@@ -843,6 +869,7 @@ function readRanges_() {
   const config = settings.getLastRow() > 1 ? settings.getRange(2, 1, settings.getLastRow() - 1, 7).getValues() : [];
   const ranges = Object.create(null);
   const seen = Object.create(null);
+  const chipSourceCache = Object.create(null);
   const warnings = [];
   const rowStatus = [];
   config.forEach((row, index) => {
@@ -919,6 +946,47 @@ function readRanges_() {
       let colors = [];
       const extra = {};
       if (row[4] === true) {
+        extra.chips = values.map((line, r) => line.map((value, c) => {
+          const validation = validations[r] && validations[r][c];
+          if (!validation) return '';
+          const criteria = validation.getCriteriaType();
+          if (criteria === SpreadsheetApp.DataValidationCriteria.CHECKBOX) return '';
+          if (criteria !== SpreadsheetApp.DataValidationCriteria.VALUE_IN_LIST &&
+              criteria !== SpreadsheetApp.DataValidationCriteria.VALUE_IN_RANGE) return '';
+          const criteriaValues = validation.getCriteriaValues() || [];
+          const showDropdown = criteriaValues[1] !== false;
+          let swatch = null;
+          if (criteria === SpreadsheetApp.DataValidationCriteria.VALUE_IN_RANGE && criteriaValues[0]) {
+            let sourceKey = '';
+            try {
+              const sourceRange = criteriaValues[0];
+              sourceKey = sourceRange.getSheet().getName() + '!' + sourceRange.getA1Notation();
+              if (!Object.prototype.hasOwnProperty.call(chipSourceCache, sourceKey)) {
+                if (sourceRange.getNumRows() * sourceRange.getNumColumns() > MAX_CHIP_SOURCE_CELLS) {
+                  chipSourceCache[sourceKey] = null;
+                } else {
+                  const fontColors = sourceRange.getFontColorObjects().map(sourceLine => sourceLine.map(color => {
+                    try {
+                      return color.asRgbColor().asHexString();
+                    } catch (e) {
+                      return '';
+                    }
+                  }));
+                  chipSourceCache[sourceKey] = {
+                    displayValues: sourceRange.getDisplayValues(),
+                    backgrounds: sourceRange.getBackgrounds(),
+                    fontColors: fontColors
+                  };
+                }
+              }
+              const source = chipSourceCache[sourceKey];
+              if (source) swatch = chipSwatch(source.displayValues, source.backgrounds, source.fontColors, value);
+            } catch (e) {
+              if (sourceKey) chipSourceCache[sourceKey] = null;
+            }
+          }
+          return chipCode(value, showDropdown, swatch);
+        }));
         colors = range.getFontColorObjects().map(line => line.map(color => {
           try {
             return color.asRgbColor().asHexString();
@@ -941,7 +1009,7 @@ function readRanges_() {
         extra.rowh = keepRows.map((keep, i) => keep ? sheet.getRowHeight(startRow + i) : null).filter(value => value !== null);
         const merges = range.getMergedRanges().map(merge => [merge.getRow() - startRow, merge.getColumn() - startCol, merge.getNumRows(), merge.getNumColumns()]);
         extra.merges = remapMerges(merges, keepRows, keepCols, MAX_ROWS, MAX_COLS);
-        ['styles', 'sizes', 'bg', 'ha', 'wrap'].forEach(key => {
+        ['styles', 'sizes', 'bg', 'ha', 'wrap', 'chips'].forEach(key => {
           if (Object.prototype.hasOwnProperty.call(extra, key)) {
             extra[key] = hiddenFilter(extra[key], keepRows, keepCols);
           }

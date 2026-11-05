@@ -27,6 +27,7 @@ namespace SheetBoardEditor
         internal static string DisplayDarkPrefab => RootDir + "Prefabs/SheetBoard Display Dark.prefab";
         private const string SourceTemp = "SheetBoard Source (Build Temp)";
         private const string DisplayTemp = "SheetBoard Display (Build Temp)";
+        private const float BoldWeight = 1.25f;
 
         internal static void BuildPrefabs()
         {
@@ -59,11 +60,17 @@ namespace SheetBoardEditor
             {
             SheetBoardDisplay display = root.AddUdonSharpComponent<SheetBoardDisplay>();
             display.lightTheme = lightTheme;
+            display.chipPalette = lightTheme
+                ? new Color[] { new Color32(0xF8, 0xD7, 0xDA, 0xFF), new Color32(0xFD, 0xE2, 0xC0, 0xFF), new Color32(0xFF, 0xF1, 0xB0, 0xFF), new Color32(0xD6, 0xF0, 0xCF, 0xFF), new Color32(0xCB, 0xED, 0xE7, 0xFF), new Color32(0xD2, 0xE4, 0xFB, 0xFF), new Color32(0xE1, 0xDA, 0xF6, 0xFF), new Color32(0xF6, 0xD6, 0xEA, 0xFF), new Color32(0xE8, 0xE1, 0xD2, 0xFF), new Color32(0xD8, 0xE0, 0xE7, 0xFF) }
+                : new Color[] { new Color32(0x7A, 0x2E, 0x3A, 0xFF), new Color32(0x7A, 0x4A, 0x16, 0xFF), new Color32(0x66, 0x57, 0x0F, 0xFF), new Color32(0x2F, 0x5E, 0x32, 0xFF), new Color32(0x1F, 0x5C, 0x56, 0xFF), new Color32(0x24, 0x49, 0x7A, 0xFF), new Color32(0x4A, 0x3B, 0x7A, 0xFF), new Color32(0x6E, 0x2E, 0x5C, 0xFF), new Color32(0x5A, 0x4E, 0x3A, 0xFF), new Color32(0x3C, 0x4A, 0x57, 0xFF) };
+            display.chipColor = lightTheme ? new Color32(0xE8, 0xEA, 0xED, 0xFF) : new Color32(0x3C, 0x40, 0x43, 0xFF);
+            display.chipArrowColor = lightTheme ? new Color32(0x5F, 0x63, 0x68, 0xFF) : new Color32(0x9A, 0xA0, 0xA6, 0xFF);
             display.maxRows = 40;
             display.maxCols = 12;
             display.showGrid = true;
             display.gridWidth = 1f;
             display.maxOverlays = 24;
+            display.maxChips = 64;
             display.textScale = 1.4f;
             display.zebra = false;
             Canvas canvas = CreateCanvas(root.transform, "Canvas", new Vector2(1600f, 1000f));
@@ -91,6 +98,22 @@ namespace SheetBoardEditor
             display.cellTemplate = CreateImage(table.transform, "CellTemplate", Color.white);
             SetEdges(display.cellTemplate.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
             display.cellTemplate.gameObject.SetActive(false);
+            GameObject chipLayer = new GameObject("ChipLayer", typeof(RectTransform));
+            chipLayer.transform.SetParent(table.transform, false);
+            SetEdges(chipLayer.GetComponent<RectTransform>(), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            Sprite chipSprite = EnsureShapeSprite("SheetBoard Chip.png", 64, 64, true);
+            display.chipTemplate = CreateImage(chipLayer.transform, "ChipTemplate", Color.white);
+            display.chipTemplate.sprite = chipSprite;
+            display.chipTemplate.type = Image.Type.Sliced;
+            display.chipTemplate.gameObject.SetActive(false);
+            GameObject arrowLayer = new GameObject("ArrowLayer", typeof(RectTransform));
+            arrowLayer.transform.SetParent(table.transform, false);
+            SetEdges(arrowLayer.GetComponent<RectTransform>(), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            Sprite arrowSprite = EnsureShapeSprite("SheetBoard Arrow.png", 64, 40, false);
+            display.arrowTemplate = CreateImage(arrowLayer.transform, "ArrowTemplate", Color.white);
+            display.arrowTemplate.sprite = arrowSprite;
+            display.arrowTemplate.type = Image.Type.Simple;
+            display.arrowTemplate.gameObject.SetActive(false);
             display.statusDot = CreateImage(canvas.transform, "StatusDot", lightTheme ? new Color32(0xD9, 0x30, 0x25, 0xFF) : new Color32(0xF2, 0x8B, 0x82, 0xFF));
             SetEdges(display.statusDot.rectTransform, Vector2.zero, Vector2.zero, new Vector2(40, 28), new Vector2(60, 48));
             display.statusText = CreateText(canvas.transform, "Status", 28f, font, TextAlignmentOptions.MidlineLeft);
@@ -251,12 +274,61 @@ namespace SheetBoardEditor
             if (material == null) { Shader shader = Shader.Find("UI/Default"); if (shader == null) throw new System.InvalidOperationException("Missing UI/Default shader."); material = new Material(shader) { name = "SheetBoard UI Material" }; AssetDatabase.CreateAsset(material, path); }
             material.renderQueue = 3000; material.SetInt("unity_GUIZTestMode", (int)CompareFunction.LessEqual); EditorUtility.SetDirty(material); return material;
         }
+        private static Sprite EnsureShapeSprite(string fileName, int width, int height, bool circle)
+        {
+            string path = RootDir + "Generated/" + fileName;
+            Texture2D texture = new Texture2D(width, height, TextureFormat.RGBA32, false, true);
+            Color32[] pixels = new Color32[width * height];
+            const int samples = 4;
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    int covered = 0;
+                    for (int sy = 0; sy < samples; sy++)
+                    {
+                        for (int sx = 0; sx < samples; sx++)
+                        {
+                            float px = x + (sx + 0.5f) / samples;
+                            float py = y + (sy + 0.5f) / samples;
+                            if (circle)
+                            {
+                                float dx = px - width * 0.5f;
+                                float dy = py - height * 0.5f;
+                                if (dx * dx + dy * dy <= width * width * 0.25f) covered++;
+                            }
+                            else if (px >= width * 0.5f - py * (width / (float)height) * 0.5f && px <= width * 0.5f + py * (width / (float)height) * 0.5f) covered++;
+                        }
+                    }
+                    byte alpha = (byte)(covered * 255 / (samples * samples));
+                    pixels[y * width + x] = new Color32(255, 255, 255, alpha);
+                }
+            }
+            texture.SetPixels32(pixels);
+            texture.Apply(false, false);
+            System.IO.File.WriteAllBytes(path, texture.EncodeToPNG());
+            Object.DestroyImmediate(texture);
+            AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
+            TextureImporter importer = AssetImporter.GetAtPath(path) as TextureImporter;
+            if (importer == null) throw new System.InvalidOperationException("Missing texture importer: " + path);
+            importer.textureType = TextureImporterType.Sprite;
+            importer.spriteImportMode = SpriteImportMode.Single;
+            importer.filterMode = FilterMode.Bilinear;
+            importer.mipmapEnabled = false;
+            importer.alphaIsTransparency = true;
+            importer.spriteBorder = circle ? new Vector4(31f, 31f, 31f, 31f) : Vector4.zero;
+            importer.SaveAndReimport();
+            Sprite sprite = AssetDatabase.LoadAssetAtPath<Sprite>(path);
+            if (sprite == null) throw new System.InvalidOperationException("Unable to load generated sprite: " + path);
+            return sprite;
+        }
+
         private static Material EnsureTmpMaterial(TMP_FontAsset font)
         {
             string path = RootDir + "Generated/SheetBoard TMP Material.mat";
             Material material = AssetDatabase.LoadAssetAtPath<Material>(path);
             if (material == null) { if (font.material == null) throw new System.InvalidOperationException("Missing font material."); material = new Material(font.material) { name = "SheetBoard TMP Material" }; AssetDatabase.CreateAsset(material, path); }
-            material.renderQueue = 3000; material.SetInt("unity_GUIZTestMode", (int)CompareFunction.LessEqual); EditorUtility.SetDirty(material); return material;
+            material.renderQueue = 3000; material.SetInt("unity_GUIZTestMode", (int)CompareFunction.LessEqual); material.SetFloat("_WeightBold", BoldWeight); EditorUtility.SetDirty(material); return material;
         }
         private static TMP_Text CreateOverlayTemplate(Transform table, TMP_FontAsset font, string name, bool wrap)
         {

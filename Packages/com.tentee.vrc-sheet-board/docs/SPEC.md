@@ -168,9 +168,12 @@ public bool autoFitColumns = true;     // 列幅と文字サイズを自動調�
 public float maxRowHeight = 64f;       // px
 public float columnGap = 12f;          // px。showGrid が OFF かつ colw を使わないとき有効
 public int maxOverlays = 24;           // プールごと
+public int maxChips = 64;              // チップと矢印のプール
+public bool chipAutoPalette = true;    // チップを名前ごとに自動配色
+public Color[] chipPalette;             // 自動配色パレット（10 色）
 public float nearCheckInterval = 1f;   // 秒。0.25〜1.5 にクランプ
 // 色（α 0 なら lightTheme に応じた既定値で埋める）
-public Color boardColor, bodyColor, gridColor, headerBackgroundColor, zebraColor, normalColor, staleColor, errorColor, busyColor, refreshButtonColor, refreshLabelColor, refreshDisabledColor, refreshDisabledLabelColor;
+public Color boardColor, bodyColor, gridColor, headerBackgroundColor, zebraColor, chipColor, chipArrowColor, normalColor, staleColor, errorColor, busyColor, refreshButtonColor, refreshLabelColor, refreshDisabledColor, refreshDisabledLabelColor;
 public string rangeMissingText = "範囲「{name}」が見つかりません";
 public string sourceMissingText = "Sourceが設定されていません";
 public string refreshIdleText = "更新";
@@ -179,7 +182,7 @@ public Image background;
 public TMP_Text titleText, statusText;
 public RectTransform tableArea;
 public TMP_Text columnTemplate, overlayTemplate, overlayNoWrapTemplate;
-public Image cellTemplate, statusDot;
+public Image cellTemplate, chipTemplate, arrowTemplate, statusDot;
 public Button refreshButton;
 public TMP_Text refreshLabel;
 ```
@@ -202,14 +205,20 @@ Display Inspector では `rangeMissingText` と `sourceMissingText` を含むす
 | refreshLabelColor | `#FFFFFF` | `#F1F5F7` |
 | refreshDisabledColor | `#E3E6E8` | `#252B33` |
 | refreshDisabledLabelColor | `#56616B` | `#8B96A1` |
+| chipColor | `#E8EAED` | `#3C4043` |
+| chipArrowColor | `#5F6368` | `#9AA0A6` |
+
+`chipPalette` の既定値（順番どおり 10 色）は、ライトが `#F8D7DA`, `#FDE2C0`, `#FFF1B0`, `#D6F0CF`, `#CBEDE7`, `#D2E4FB`, `#E1DAF6`, `#F6D6EA`, `#E8E1D2`, `#D8E0E7`、ダークが `#7A2E3A`, `#7A4A16`, `#66570F`, `#2F5E32`, `#1F5C56`, `#24497A`, `#4A3B7A`, `#6E2E5C`, `#5A4E3A`, `#3C4A57`。`chipAutoPalette` は既定で ON。
 
 ### 4.2 描画の構造
 
-描画順（奥から）: 格子の下地 → セル矩形 → 列 TMP → オーバーレイ。
+兄弟順・描画順（奥から）: 格子の下地 → セル矩形 → ChipLayer → ArrowLayer → 列 TMP・オーバーレイ。チップと ▼ はそれぞれテンプレートから複製するプールで、両方の上限は `maxChips`。プールは初回描画で作り、以後 SetActive で再利用する。
 
 - **列 TMP**: 列ごとに 1 つ。`columnTemplate` の親（RectMask2D の列枠）ごと複製する。セルは改行区切りで 1 列の TMP に並べる。テンプレートは折り返し OFF・overflow Overflow・richText ON・margin 0。
 - **セル矩形**: `cellTemplate` から必要になった分だけ作る（上限 `maxRows × maxCols`）。格子の下地も `cellTemplate` から 1 枚作る。
+- **チップ・▼**: `chipTemplate` と `arrowTemplate` から作り、同じ添字のチップと矢印を組にして再利用する。ChipLayer はセル矩形より手前、ArrowLayer は ChipLayer より手前、列 TMP とオーバーレイは両レイヤーより手前に置く。
 - **オーバーレイ**: 折り返しあり（`overlayTemplate`）と折り返しなし（`overlayNoWrapTemplate`）の 2 プール。どちらも上限 `maxOverlays`。
+- 生成スプライトはチップが 64 × 64 px（border は四辺 31 px）、▼ が 64 × 40 px（border 0 px）。
 - プールは初回の描画で作り、以後は SetActive で再利用する。実際に描く行数・列数は「プールに収まる数」で上限をかける（実行時に `maxRows` などを上げてもはみ出さない）。
 - Udon で使えない API: `TMP_Text.transform / gameObject / rectTransform` → `GetComponent<RectTransform>()` を使う。`richText / enableWordWrapping / overflowMode / margin` の setter → テンプレート側で設定する。使える setter は `text / color / fontSize / alignment`。
 
@@ -217,7 +226,7 @@ Display Inspector では `rangeMissingText` と `sourceMissingText` を含むす
 
 描画の最初にセルを 1 回だけ走査し、以後はこの配列だけを読む（DataList の参照を繰り返さない）。
 
-- セルごと: 加工前の文字列、ASCII 文字数と非 ASCII 文字数、pt、style ビット、文字色（有無と Color）、背景色（有無と Color）、横配置（int 0 左 / 1 中央 / 2 右）、wrap。
+- セルごと: 加工前の文字列、ASCII 文字数と非 ASCII 文字数、pt、style ビット、文字色（有無と Color）、背景色（有無と Color）、横配置（int 0 左 / 1 中央 / 2 右）、wrap、チップの種別、チップ背景色、チップ文字色。
 - 結合: `covered[]`（結合で覆われたセル）と、起点セルの行数・列数。範囲外は切り詰め、重なる結合と 1×1 の結合は捨てる。
 - 基準 pt: 異なる pt 値を最大 16 種類まで数えて最頻値を取る（線形時間）。
 
@@ -225,6 +234,7 @@ Display Inspector では `rangeMissingText` と `sourceMissingText` を含むす
 
 - 列幅: 手動の cols があればその比。手動指定がなく autoFitColumns が ON（既定）の場合、文字が収まる最低幅を確保し、余りをシート列幅 colw の比、または colw がなければ必要幅の比で配る。autoFitColumns が OFF なら従来どおり colw、または最長セル幅（ASCII 1・その他 2、2〜40 にクランプ）の比を使う。配列の不足・0 以下の値は有効値の中央値で補う。
 - 列幅の見積もり: 1em あたり (ASCII 数 × 0.55 + 非 ASCII 数) × サイズ倍率 × 太字係数 × 1.05。サイズ倍率は <size%> と同じ 0.6〜1.6、太字係数は 1.06（太字または見出し行）。200 文字までを数え、空き列は 0.6em とする。結合セル・折り返しセル・改行を含むセル・右側が行末まで空（値なし・背景色なし・結合なし）の左寄せセルは列の必要幅に含めない。途中に値などがある行の左寄せセルは必要幅に含める。
+- チップのセルは列の必要幅に `ChipExtraEm`（1.3em）を加える。チップのセルは、はみ出しオーバーレイの候補にしない。
 - 列間: autoFitColumns の自動列幅では showGrid が ON なら 0、OFF なら columnGap。それ以外は従来どおり showGrid または colw 使用時は 0、それ以外は columnGap。
 - 行の高さ: rowh があればその比（足りない・0 以下は有効値の中央値、無ければ 21）、無ければ全行同じ。倍率 k = min(表領域の高さ / Σrowh, maxRowHeight / median(rowh))。
 - 整数化: 行の上端 Y_r = round(累積)、高さ h_r = Y_{r+1} − Y_r として整数 px にそろえ、セル矩形と <line-height> の両方で同じ値を使う（丸め誤差の累積でずれないように）。列も同様。
@@ -246,7 +256,9 @@ Display Inspector では `rangeMissingText` と `sourceMissingText` を含むす
    - 文字色があり背景色が無いとき: ダークで輝度 0.25 未満、またはライトで 0.85 超なら `bodyColor`。それ以外はその色。
    - 背景色があるときの明示色はそのまま。
 
-列 TMP の各行の先頭に `<line-height=h_r>`（行の高さが全部同じなら先頭 1 回）、`<align=left|center|right>`、縦中央用の `<voffset=-N>`…`</voffset>`（`N = h_r/2 − 0.78 × その行の実効文字サイズ`、|N| < 1 なら付けない）を付ける。結合で覆われたセルとオーバーレイで描くセルは空行にする（タグは付けて行位置を保つ）。
+列 TMP の先頭にダミー行を置く。`<line-height=0>`、透明な `M`、基準サイズの V0 を使い、最初の行の位置を合わせる。各セル行の先頭には `<line-height=h_r>`（行の高さが全部同じなら先頭 1 回）、`<align=left|center|right>`、縦中央用の `<voffset=-offset>`…`</voffset>` を付ける。`offset = h_r/2 − 0.78 × b + 0.38 × (f − b)` で、`b` は基準文字サイズ、`f` はセルの実効文字サイズ。`|offset| < 1` なら `<voffset>` は付けない。結合で覆われたセルとオーバーレイで描くセルは空行にする（タグは付けて行位置を保つ）。
+
+チップセルの文字色は、チップ文字色、コントラスト比 3.0 以上を満たすセル文字色、自動文字色の順で選ぶ。
 
 ### 4.6 範囲の選択とタイトル
 
@@ -274,7 +286,16 @@ Display Inspector では `rangeMissingText` と `sourceMissingText` を含むす
 
 プールが尽きた・テンプレートが null のときは列 TMP に 1 行で描く。オーバーレイは縦中央、横は配置どおり、文字サイズ `basePx`。
 
-### 4.9 監視ループ
+### 4.9 チップ
+
+- 種別 2 のチップの寸法: 左右の余白 `ChipMargin = 3px`、高さ `min(セル高 − 2 × 3px, round(f × ChipHeightEm))`、`ChipHeightEm = 1.55`。幅はセル幅から左右の余白を引く。チップセルの必要幅には `ChipExtraEm = 1.3em` を加える。
+- チップは 64 × 64 px、四辺の border が 31 px のスライス画像で、ピル形に伸縮する。高さに合わせた倍率で描画する。
+- ▼ はセル内で縦中央に置く。チップ内では右端から `0.45em` 内側、矢印だけのセルではセル右端から `6px` 内側に置く。幅は `0.62em`、高さは `0.36em`。▼ の画像は 64 × 40 px、border は 0。
+- 塗り色の優先順位は、参照元セルのチップ背景色 → 自動配色 → `chipColor`。
+- 自動配色は表示値の前後の空白を除き、内部の全角空白を取り除いた文字列で名前を比較する。大文字・小文字は区別する。空欄、または空白と `- ‐ ‑ ‒ – — ― ー － ・ / ／` だけの値は名前にしない。表を上から左から走査し、初出の名前ごとにパレットを順番に割り当て、パレットの末尾の次は先頭に戻る。同じ名前には同じ色を使う。既定パレットは §4.1 のライト・ダーク各 10 色。
+- 種別 1（矢印のみ）の ▼ は、チップ文字色があればそれを使う。そうでなければセル文字色が背景色（背景指定がなければ `boardColor`）とのコントラスト比 3.0 以上のときにその色を使い、それ以外は `chipArrowColor` を使う。
+
+### 4.10 監視ループ
 
 `_Watch` の状態更新ごとに、`source.IsBusy()` が true なら `busyColor` のランプを α 1 と 0.35 で交互に切り替える。busy でなければ従来の level 色を使う。別の遅延イベントは作らない。
 
@@ -289,7 +310,7 @@ Display Inspector では `rangeMissingText` と `sourceMissingText` を含むす
 
 `public void RenderNow()`（現在のデータで強制的に描画）と色・プールの初期化は、`Start` を経ないエディターの C# から呼んでも動くこと。テンプレートが欠けているときは初回に 1 度だけ `Debug.LogWarning` を出す。
 
-### 4.10 手動更新ボタン
+### 4.11 手動更新ボタン
 
 ボタンの onClick は Display の `OnRefreshPressed()` を呼び、Display が `source.RequestRefresh()` を呼ぶ。押した直後にも状態行・ランプ・ボタン表示を更新する。
 
@@ -350,10 +371,11 @@ Apps Script が出力し、Source が読む。UTF-8。
 | `bg` | 文字列の 2 次元配列 | 背景色。白 `#FFFFFF` は空 |
 | `ha` | 文字列の 2 次元配列 | セルごとの横配置 `l` / `c` / `r`（G 列が空のとき） |
 | `wrap` | 0/1 の 2 次元配列 | 折り返し |
+| `chip` | 文字列の 2 次元配列 | チップ種別と任意の背景色・文字色。`a` = 矢印のみ、`c` = チップと矢印、`c|背景色|文字色` = 色を含むチップ（色が無い側は空欄） |
 | `colw` / `rowh` | 数値配列 | 列幅 / 行の高さ（px）。`colw` は F 列が空のとき |
 | `merges` | 配列の配列 | `[r, c, rowSpan, colSpan]`（出力後の 0 始まりの番号） |
 
-ランタイムは、任意キーが無くても、配列の長さが `rows` と合わなくても例外を出さずに動くこと。最上位の `order` は設定タブ順を保持する任意キーで、無い場合は `ranges` 辞書の順に戻る。旧 0.1.0 ランタイムは未知の最上位キー `order` を無視し、既存の JSON と同様に `ranges` を読むため互換性がある。全セルが既定値なら `style`、`color`、`bg`、`ha`、`wrap` の書式配列は省略されうる。0.1.0 はこれらの無いキーを空値として扱い、既定値と同じ表示になる。`size` は空値で表示倍率が変わるため省略しない。旧形式の `bold`（0/1 の 2 次元配列）は `style` が無いときだけ読む（Apps Script は出力しない）。
+ランタイムは、任意キーが無くても、配列の長さが `rows` と合わなくても例外を出さずに動くこと。最上位の `order` は設定タブ順を保持する任意キーで、無い場合は `ranges` 辞書の順に戻る。旧 0.1.0 ランタイムは未知の最上位キー `order` を無視し、既存の JSON と同様に `ranges` を読むため互換性がある。全セルが既定値なら `style`、`color`、`bg`、`ha`、`wrap` の書式配列は省略されうる。`chip` は「書式を反映」が TRUE のときだけ出力し、全セルが空なら省略する。旧ランタイムは未知の範囲キー `chip` を無視するため、互換性がある。`chip` の配列は表示値の切り詰めに影響しない。0.1.0 は書式配列の無いキーを空値として扱い、既定値と同じ表示になる。`size` は空値で表示倍率が変わるため省略しない。旧形式の `bold`（0/1 の 2 次元配列）は `style` が無いときだけ読む（Apps Script は出力しない）。
 
 ## 6. Apps Script（`AppsScript/`）
 
@@ -453,6 +475,8 @@ Apps Script が出力し、Source が読む。UTF-8。
 1. ロックを取る（トリガー経由は `tryLock(0)`、メニュー経由は `tryLock(10000)`）。取れなければ保留フラグを立てて終わる。
 2. 実行者がトークンを持たなければ保留フラグを立てて終わる（§6.2）。
 3. 設定タブを読み、各範囲の表示値と、書式を反映する範囲は書式（§5）を一括取得する。非表示の行・列は出力しない。チェックボックスは `■` / `□`。
+   - 「書式を反映」が TRUE の範囲では、`VALUE_IN_LIST` / `VALUE_IN_RANGE` の入力規則をチップ情報として収集する。`showDropdown=false` とチェックボックス、その他の条件種別は対象外。`VALUE_IN_RANGE` は参照元範囲から表示値の一致するセルの背景色・文字色を借りる（最大 500 セル）。同じ参照元はキャッシュし、範囲超過・取得時の例外は色なしとして扱う。
+   - Google Sheets API の `DataValidationRule` と Apps Script の `DataValidation` には、チップ自体の色や表示形式（チップ / 矢印 / 書式なし）を読む項目がない。そのため表示形式は判別せず、対象のドロップダウンをチップとして描く。追加の `oauthScopes` は必要なく、スコープは変更していない。
 4. `rev` を計算する。`force` でなく保留フラグも無く、`rev` が前回と同じで、最終公開から 60 分未満なら終わる。
 5. `rev` が変わったときだけ `updatedUnix` を現在時刻にする。`aliveUnix` は常に現在時刻。`updated` はシートのタイムゾーン（`sheetTimeZone()`: スプレッドシート → スクリプト → `Asia/Tokyo`）で ISO 8601。
 6. JSON が 500 KB を超えたらエラー。§6.5 のとおり PATCH。
@@ -552,7 +576,8 @@ V8、`Asia/Tokyo`、スコープは `spreadsheets.currentonly`、`script.externa
 - 反映: セル・書式の編集は数秒〜十数秒（5 秒以内の連続編集は次の確認で）。数式の結果だけの変化は最大約 5 分。ワールド側は約 1 分ごとに取得。
 - Gist の CDN キャッシュ（300 秒）は URL ローテーションで避けるが、他のクライアントが直前に読んだ同じ URL からは古い版が返りうる（§3.4 の巻き戻り防止で表示は戻らない）。
 - URL には GitHub のユーザー名、Gist の説明にはスプレッドシート名が入る。
-- 再現できないもの: 条件付き書式の色、罫線（代わりに格子）、画像・グラフ・図形、絵文字やフォントに無い記号、フォントの種類、縦位置（中央固定）、プルダウンの ▼。
+- 再現できないもの: 条件付き書式の色、罫線（代わりに格子。罫線を読むには Sheets API と全スプレッドシートの閲覧権限が必要なため、権限を広げない方針で見送り）、画像・グラフ・図形、絵文字やフォントに無い記号、フォントの種類、縦位置（中央固定）。
+- チップ色は参照元セルの色からのみ再現できる。それ以外は名前ごとの自動配色または既定色になる。「矢印」「書式なし」の表示形式のドロップダウンもチップとして描く。
 - Apps Script の無料アカウントのトリガー実行時間は 90 分 / 日。大きな範囲での実行時間は未計測。
 
 ## 10. Source ごとのワールド内閲覧権限

@@ -83,9 +83,12 @@ namespace SheetBoardEditor
             showColors = EditorGUILayout.Foldout(showColors, "色（任意）", true);
             if (showColors)
             {
+                EditorGUILayout.PropertyField(serializedObject.FindProperty("chipAutoPalette"), new GUIContent("チップを名前ごとに色分け", "シートから色が読めないチップに、同じ名前なら同じ色を自動で付けます"));
                 Draw("boardColor");
                 Draw("bodyColor");
                 Draw("gridColor");
+                EditorGUILayout.PropertyField(serializedObject.FindProperty("chipColor"), new GUIContent("チップの色"));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty("chipArrowColor"), new GUIContent("▼ の色"));
                 Draw("headerBackgroundColor");
                 using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("zebra").boolValue))
                     Draw("zebraColor");
@@ -110,6 +113,7 @@ namespace SheetBoardEditor
             {
                 using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("showGrid").boolValue)) Draw("gridWidth");
                 Draw("maxOverlays");
+                Draw("maxChips");
                 Draw("nearCheckInterval");
             }
             showInternal = EditorGUILayout.Foldout(showInternal, "内部参照（通常は変更不要）", true);
@@ -122,6 +126,8 @@ namespace SheetBoardEditor
                 Draw("tableArea");
                 Draw("columnTemplate");
                 Draw("cellTemplate");
+                Draw("chipTemplate");
+                Draw("arrowTemplate");
                 Draw("overlayTemplate");
                 Draw("overlayNoWrapTemplate");
                 Draw("statusDot");

@@ -4,6 +4,21 @@ All notable changes to this package are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-05
+
+### Added
+
+- Draw dropdown chips and arrows in the Display.
+- Add the `chip` layer to published JSON.
+- Use source cell colours for dropdowns that use values from a range.
+- Add automatic chip colours by name, enabled by default with `chipAutoPalette`.
+- Add Display fields `maxChips`, `chipColor`, `chipArrowColor`, `chipAutoPalette`, `chipPalette`, `chipTemplate`, and `arrowTemplate`.
+
+### Changed
+
+- Make bold text heavier with TMP material `_WeightBold` set to 1.25.
+- Correct vertical centring for cells whose font size differs from the base size and for columns whose first row is larger.
+
 ## [0.2.1] - 2026-11-04
 
 ### Changed

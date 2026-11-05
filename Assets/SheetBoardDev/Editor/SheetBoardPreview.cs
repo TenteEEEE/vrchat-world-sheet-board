@@ -13,13 +13,32 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using VRC.Udon;
+using VRC.SDK3.Data;
 
 namespace SheetBoardDev
 {
     public static class SheetBoardPreview
     {
         private static readonly List<string> failedClipLabels = new List<string>();
+        private static readonly List<string> failedChipLabels = new List<string>();
         private const float OverlayPadding = 6f;
+
+        private static string NormalizePaletteCheck(string value)
+        {
+            value = value.Trim().Replace("\u3000", "");
+            return value;
+        }
+
+        private static bool IsPaletteBlankCheck(string value)
+        {
+            if (value.Length == 0) return true;
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                if (c != '-' && c != '\u2010' && c != '\u2011' && c != '\u2013' && c != '\u2014' && c != '\u2015' && c != '\u30FC' && c != '\uFF0D' && c != '\u30FB' && c != '/' && c != '\uFF0F' && !char.IsWhiteSpace(c)) return false;
+            }
+            return true;
+        }
 
         public static void RenderSampleBatch()
         {
@@ -32,6 +51,7 @@ namespace SheetBoardDev
         private static void Render()
         {
             failedClipLabels.Clear();
+            failedChipLabels.Clear();
             VerifyWiring();
             EditorSceneManager.NewScene(NewSceneSetup.EmptyScene);
             GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(SheetBoardInstaller.DisplayPrefab);
@@ -82,7 +102,7 @@ namespace SheetBoardDev
                 RenderBusyRange(display, source, Path.Combine(temp, "SheetBoardPreview_busy.png"), camera, renderTexture, image);
                 string fidelityPath = Path.Combine(Path.GetDirectoryName("Assets/SheetBoardDev/Samples/sample.json"), "sample_fidelity.json");
                 string fidelityJson = File.ReadAllText(fidelityPath, Encoding.UTF8);
-                string[] ranges = { "event", "wraptest", "fitcase" };
+                string[] ranges = { "event", "wraptest", "fitcase", "chips" };
                 string[] prefabPaths = { SheetBoardInstaller.DisplayPrefab, SheetBoardInstaller.DisplayDarkPrefab };
                 string[] themes = { "light", "dark" };
                 for (int r = 0; r < ranges.Length; r++)
@@ -105,15 +125,20 @@ namespace SheetBoardDev
                         RenderRange(display, source, ranges[r], Path.Combine(temp, file), camera, renderTexture, image);
                     }
                 }
-                if (failedClipLabels.Count > 0)
+                if (failedClipLabels.Count > 0 || failedChipLabels.Count > 0)
                 {
-                    string labels = "";
+                    string failures = "";
                     for (int i = 0; i < failedClipLabels.Count; i++)
                     {
-                        if (i > 0) labels += ", ";
-                        labels += failedClipLabels[i];
+                        if (failures.Length > 0) failures += ", ";
+                        failures += "clip=" + failedClipLabels[i];
                     }
-                    throw new InvalidOperationException("[SheetBoard] clip check failed for: " + labels);
+                    for (int i = 0; i < failedChipLabels.Count; i++)
+                    {
+                        if (failures.Length > 0) failures += ", ";
+                        failures += "chip=" + failedChipLabels[i];
+                    }
+                    throw new InvalidOperationException("[SheetBoard] preview checks failed for: " + failures);
                 }
             }
             finally
@@ -129,7 +154,7 @@ namespace SheetBoardDev
         private static void VerifyWiring()
         {
             string[] paths = { SheetBoardInstaller.DisplayPrefab, SheetBoardInstaller.DisplayDarkPrefab };
-            string[] fields = { "background", "titleText", "statusText", "tableArea", "columnTemplate", "overlayTemplate", "overlayNoWrapTemplate", "cellTemplate", "statusDot", "refreshButton", "refreshLabel" };
+            string[] fields = { "background", "titleText", "statusText", "tableArea", "columnTemplate", "overlayTemplate", "overlayNoWrapTemplate", "cellTemplate", "chipTemplate", "arrowTemplate", "statusDot", "refreshButton", "refreshLabel" };
             EditorSceneManager.NewScene(NewSceneSetup.EmptyScene);
             GameObject sourcePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(SheetBoardInstaller.SourcePrefab);
             if (sourcePrefab == null) throw new InvalidOperationException("Missing Source prefab.");
@@ -162,6 +187,10 @@ namespace SheetBoardDev
                 foreach (string field in fields)
                     if (!(UdonValue(udon, field) is UnityEngine.Object value) || value == null)
                         throw new InvalidOperationException("Missing Udon variable " + field + ": " + paths[i]);
+                Material expectedTmp = AssetDatabase.LoadAssetAtPath<Material>(SheetBoardInstaller.RootDir + "Generated/SheetBoard TMP Material.mat");
+                foreach (TMP_Text text in prefab.GetComponentsInChildren<TMP_Text>(true))
+                    if (expectedTmp == null || text.fontSharedMaterial != expectedTmp)
+                        throw new InvalidOperationException("TMP does not use the generated shared material: " + text.name + ", " + paths[i]);
                 if (!(UdonValue(udon, "lightTheme") is bool theme) || theme != (i == 0))
                     throw new InvalidOperationException("Incorrect Udon lightTheme: " + paths[i]);
                 if (!(UdonValue(udon, "textScale") is float scale) || Mathf.Abs(scale - 1.4f) > 0.0001f)
@@ -325,6 +354,7 @@ namespace SheetBoardDev
                 {
                     TMP_CharacterInfo character = characters[k];
                     if (!character.isVisible) continue;
+                    if (isColumn && character.lineNumber == 0) continue;
                     glyphs++;
                     glyphCorners[0] = character.bottomLeft;
                     glyphCorners[1] = character.topLeft;
@@ -344,7 +374,7 @@ namespace SheetBoardDev
                     }
                     float horizontal = Mathf.Max(tableMin.x - left, right - tableMax.x, maskMin.x - left, right - maskMax.x);
                     float vertical = Mathf.Max(tableMin.y - bottom, top - tableMax.y, maskMin.y - bottom, top - maskMax.y);
-                    int row = isColumn ? character.lineNumber : overlayRow;
+                    int row = isColumn ? character.lineNumber - 1 : overlayRow;
                     int col = isColumn ? columnIndex : overlayCol;
                     int workRows = (int)PrivateValue(display, "workRows");
                     int workCols = (int)PrivateValue(display, "workCols");
@@ -434,6 +464,293 @@ namespace SheetBoardDev
             return raw != null && index >= 0 && index < raw.Length ? raw[index] : "";
         }
 
+        private static void LocalBounds(RectTransform rect, RectTransform root, out float left, out float right, out float bottom, out float top)
+        {
+            Vector3[] corners = new Vector3[4];
+            rect.GetWorldCorners(corners);
+            left = float.PositiveInfinity;
+            right = float.NegativeInfinity;
+            bottom = float.PositiveInfinity;
+            top = float.NegativeInfinity;
+            for (int i = 0; i < 4; i++)
+            {
+                Vector3 point = root.InverseTransformPoint(corners[i]);
+                left = Mathf.Min(left, point.x);
+                right = Mathf.Max(right, point.x);
+                bottom = Mathf.Min(bottom, point.y);
+                top = Mathf.Max(top, point.y);
+            }
+        }
+
+        private static bool AssertChipLayout(SheetBoardDisplay display, SheetBoardSource source, string rangeName, string label)
+        {
+            bool failed = false;
+            int rows = (int)PrivateValue(display, "workRows");
+            int cols = (int)PrivateValue(display, "workCols");
+            int[] kinds = PrivateValue(display, "workChipKind") as int[];
+            bool[] covered = PrivateValue(display, "workCovered") as bool[];
+            bool[] workHasChipBg = PrivateValue(display, "workHasChipBg") as bool[];
+            string[] rawValues = PrivateValue(display, "workRaw") as string[];
+            Color[] chipBackgrounds = PrivateValue(display, "workChipBg") as Color[];
+            bool[] hasAutoPalette = PrivateValue(display, "workHasAutoChipColor") as bool[];
+            Color[] autoPaletteColors = PrivateValue(display, "workAutoChipColors") as Color[];
+            int[] spanRows = PrivateValue(display, "workSpanRows") as int[];
+            int[] spanCols = PrivateValue(display, "workSpanCols") as int[];
+            float[] xs = PrivateValue(display, "workXs") as float[];
+            float[] ws = PrivateValue(display, "workWs") as float[];
+            float[] ys = PrivateValue(display, "workYs") as float[];
+            float[] hs = PrivateValue(display, "workHs") as float[];
+            Image[] chipImages = PrivateValue(display, "chips") as Image[];
+            Image[] arrowImages = PrivateValue(display, "arrows") as Image[];
+            TMP_Text[] columns = PrivateValue(display, "columns") as TMP_Text[];
+            RectTransform chipLayer = PrivateValue(display, "chipContainer") as RectTransform;
+            RectTransform arrowLayer = PrivateValue(display, "arrowContainer") as RectTransform;
+            int expectedChips = 0;
+            int expectedArrows = 0;
+            DataDictionary data = source.GetRange(rangeName);
+            DataToken chipToken;
+            if (data != null && data.TryGetValue("chip", out chipToken) && chipToken.TokenType == TokenType.DataList)
+            {
+                DataList chipRows = chipToken.DataList;
+                for (int r = 0; r < chipRows.Count; r++)
+                {
+                    if (chipRows[r].TokenType != TokenType.DataList) continue;
+                    DataList row = chipRows[r].DataList;
+                    for (int c = 0; c < row.Count; c++)
+                    {
+                        if (row[c].TokenType != TokenType.String) continue;
+                        string value = row[c].String;
+                        if (value == "a") expectedArrows++;
+                        else if (value == "c" || value.StartsWith("c|")) { expectedChips++; expectedArrows++; }
+                    }
+                }
+            }
+            int actualChips = 0;
+            int actualArrows = 0;
+            if (chipImages != null) for (int i = 0; i < chipImages.Length; i++) if (chipImages[i] != null && chipImages[i].gameObject.activeInHierarchy) actualChips++;
+            if (arrowImages != null) for (int i = 0; i < arrowImages.Length; i++) if (arrowImages[i] != null && arrowImages[i].gameObject.activeInHierarchy) actualArrows++;
+            if (actualChips != expectedChips || actualArrows != expectedArrows)
+            {
+                failed = true;
+                Debug.LogError("[SheetBoard] chip count violation: " + label + ", chips=" + actualChips + "/" + expectedChips + ", arrows=" + actualArrows + "/" + expectedArrows);
+            }
+            if (chipLayer == null || arrowLayer == null || chipLayer.GetSiblingIndex() >= arrowLayer.GetSiblingIndex()) failed = true;
+            Image[] cells = PrivateValue(display, "cells") as Image[];
+            if (cells != null)
+                for (int i = 0; i < cells.Length; i++)
+                    if (cells[i] != null && cells[i].gameObject.activeInHierarchy && chipLayer != null && cells[i].transform.GetSiblingIndex() >= chipLayer.GetSiblingIndex()) failed = true;
+            if (columns != null && arrowLayer != null)
+                for (int i = 0; i < columns.Length; i++)
+                    if (columns[i] != null && columns[i].gameObject.activeInHierarchy && columns[i].transform.parent.GetSiblingIndex() <= arrowLayer.GetSiblingIndex()) failed = true;
+            int pool = 0;
+            float maxVCenterDelta = 0f;
+            string[] paletteNames = new string[rows * cols];
+            Color[] paletteColors = new Color[rows * cols];
+            int paletteNameCount = 0;
+            for (int r = 0; r < rows; r++)
+            {
+                for (int c = 0; c < cols; c++)
+                {
+                    int cell = r * cols + c;
+                    int kind = kinds == null ? 0 : kinds[cell];
+                    if (kind == 0 || (covered != null && covered[cell])) continue;
+                    int rowSpan = spanRows == null ? 1 : Mathf.Max(1, spanRows[cell]);
+                    int colSpan = spanCols == null ? 1 : Mathf.Max(1, spanCols[cell]);
+                    float cellWidth = xs[c + colSpan - 1] + ws[c + colSpan - 1] - xs[c];
+                    float cellHeight = ys[r + rowSpan - 1] + hs[r + rowSpan - 1] - ys[r];
+                    float inset = display.showGrid ? Mathf.Max(0f, display.gridWidth) : 0f;
+                    float left = display.tableArea.rect.xMin + xs[c] + inset;
+                    float top = display.tableArea.rect.yMax - ys[r] - inset;
+                    float right = left + cellWidth - inset * 2f;
+                    float bottom = top - cellHeight + inset * 2f;
+                    Image chip = chipImages != null && pool < chipImages.Length ? chipImages[pool] : null;
+                    Image arrow = arrowImages != null && pool < arrowImages.Length ? arrowImages[pool] : null;
+                    if (kind == 2)
+                    {
+                        float font = (float)PrivateValue(display, "workBasePx");
+                        float[] points = PrivateValue(display, "workPt") as float[];
+                        float basePt = (float)PrivateValue(display, "workBasePt");
+                        if (points != null && points[cell] > 0f && basePt > 0f) font *= Mathf.Clamp(points[cell] / basePt, 0.6f, 1.6f);
+                        float chipWidth = right - left - 6f;
+                        float chipHeight = Mathf.Min((top - bottom) - 6f, Mathf.Round(font * 1.55f));
+                        if (chipWidth < 4f || chipHeight < 4f) failed = true;
+                        if (chip == null || !chip.gameObject.activeInHierarchy || arrow == null || !arrow.gameObject.activeInHierarchy) failed = true;
+                        else
+                        {
+                            Color expectedFill = workHasChipBg != null && workHasChipBg[cell]
+                                ? chipBackgrounds[cell]
+                                : (hasAutoPalette != null && hasAutoPalette[cell] ? autoPaletteColors[cell] : display.chipColor);
+                            if (chip.color != expectedFill)
+                            {
+                                failed = true;
+                                Debug.LogError("[SheetBoard] chip palette fill violation: " + label + ", row=" + (r + 1) + ", col=" + (c + 1));
+                            }
+                            if (rangeName == "chips" && (workHasChipBg == null || !workHasChipBg[cell]))
+                            {
+                                string normalized = NormalizePaletteCheck(rawValues == null ? "" : rawValues[cell]);
+                                if (!IsPaletteBlankCheck(normalized))
+                                {
+                                    bool alreadySeen = false;
+                                    for (int n = 0; n < paletteNameCount; n++)
+                                    {
+                                        if (paletteNames[n] == normalized)
+                                        {
+                                            alreadySeen = true;
+                                            if (paletteColors[n] != chip.color)
+                                            {
+                                                failed = true;
+                                                Debug.LogError("[SheetBoard] repeated chip name color violation: " + label + ", name=" + normalized);
+                                            }
+                                        }
+                                        if (paletteNames[n] != normalized && display.chipPalette != null && paletteNameCount < display.chipPalette.Length && paletteColors[n] == chip.color)
+                                        {
+                                            failed = true;
+                                            Debug.LogError("[SheetBoard] distinct chip name color violation: " + label + ", name=" + normalized);
+                                        }
+                                    }
+                                    if (!alreadySeen)
+                                    {
+                                        paletteNames[paletteNameCount] = normalized;
+                                        paletteColors[paletteNameCount] = chip.color;
+                                        paletteNameCount++;
+                                    }
+                                }
+                                else if (chip.color != display.chipColor)
+                                {
+                                    failed = true;
+                                    Debug.LogError("[SheetBoard] blank chip palette violation: " + label + ", row=" + (r + 1) + ", col=" + (c + 1));
+                                }
+                            }
+                            float chipLeft, chipRight, chipBottom, chipTop;
+                            LocalBounds(chip.rectTransform, display.tableArea, out chipLeft, out chipRight, out chipBottom, out chipTop);
+                            if (chipLeft < left - 0.5f || chipRight > right + 0.5f || chipBottom < bottom - 0.5f || chipTop > top + 0.5f) failed = true;
+                            float arrowLeft, arrowRight, arrowBottom, arrowTop;
+                            LocalBounds(arrow.rectTransform, display.tableArea, out arrowLeft, out arrowRight, out arrowBottom, out arrowTop);
+                            if (arrowLeft < chipLeft - 0.5f || arrowRight > chipRight + 0.5f || arrowBottom < chipBottom - 0.5f || arrowTop > chipTop + 0.5f) failed = true;
+                            float visibleBottom = float.PositiveInfinity;
+                            float visibleTop = float.NegativeInfinity;
+                            bool hasVisibleGlyph = false;
+                            TMP_Text[] texts = display.tableArea.GetComponentsInChildren<TMP_Text>(false);
+                            for (int t = 0; t < texts.Length; t++)
+                            {
+                                TMP_Text text = texts[t];
+                                int textColumn = ColumnIndex(columns, text);
+                                int overlayRow = -1;
+                                int overlayCol = -1;
+                                bool isColumn = textColumn >= 0;
+                                if (isColumn) overlayCol = textColumn;
+                                else OverlayCell(display, text, out overlayRow, out overlayCol);
+                                if (overlayCol != c || (!isColumn && overlayRow != r)) continue;
+                                text.ForceMeshUpdate();
+                                TMP_CharacterInfo[] chars = text.textInfo.characterInfo;
+                                for (int k = 0; k < text.textInfo.characterCount && k < chars.Length; k++)
+                                {
+                                    TMP_CharacterInfo character = chars[k];
+                                    if (!character.isVisible || (isColumn && character.lineNumber - 1 != r)) continue;
+                                    Vector3 a = display.tableArea.InverseTransformPoint(text.transform.TransformPoint(character.bottomLeft));
+                                    Vector3 b = display.tableArea.InverseTransformPoint(text.transform.TransformPoint(character.bottomRight));
+                                    Vector3 glyphTop = display.tableArea.InverseTransformPoint(text.transform.TransformPoint(character.topLeft));
+                                    visibleBottom = Mathf.Min(visibleBottom, a.y);
+                                    visibleTop = Mathf.Max(visibleTop, glyphTop.y);
+                                    hasVisibleGlyph = true;
+                                    if (Mathf.Min(a.x, b.x) < arrowRight && Mathf.Max(a.x, b.x) > arrowLeft && !IsKnownOverflow(display, r, c)) failed = true;
+                                }
+                            }
+                            if (rangeName == "chips" && hasVisibleGlyph)
+                            {
+                                float glyphCenter = (visibleBottom + visibleTop) * 0.5f;
+                                float chipCenter = (chipBottom + chipTop) * 0.5f;
+                                float delta = Mathf.Abs(glyphCenter - chipCenter);
+                                maxVCenterDelta = Mathf.Max(maxVCenterDelta, delta);
+                                float tolerance = Mathf.Max(2f, 0.15f * font);
+                                if (delta > tolerance)
+                                {
+                                    failed = true;
+                                    Debug.LogError("[SheetBoard] chip vcenter violation: " + label + ", row=" + (r + 1) + ", col=" + (c + 1) + ", delta=" + delta.ToString("0.0") + "px, tolerance=" + tolerance.ToString("0.0") + "px");
+                                }
+                            }
+                        }
+                        pool++;
+                    }
+                    else
+                    {
+                        if (arrow == null || !arrow.gameObject.activeInHierarchy) failed = true;
+                        else
+                        {
+                            float arrowLeft, arrowRight, arrowBottom, arrowTop;
+                            LocalBounds(arrow.rectTransform, display.tableArea, out arrowLeft, out arrowRight, out arrowBottom, out arrowTop);
+                            if (arrowLeft < left - 0.5f || arrowRight > right + 0.5f || arrowBottom < bottom - 0.5f || arrowTop > top + 0.5f) failed = true;
+                        }
+                        pool++;
+                    }
+                }
+            }
+            if (rangeName == "chips") Debug.Log("[SheetBoard] chip vcenter max delta: " + maxVCenterDelta.ToString("0.0") + " px");
+            if (failed) Debug.LogError("[SheetBoard] chip layout violation: " + label);
+            else Debug.Log("[SheetBoard] chip check OK: " + label);
+            return failed;
+        }
+
+        private static bool AssertColumnVCenter(SheetBoardDisplay display, string label)
+        {
+            int rows = (int)PrivateValue(display, "workRows");
+            int cols = (int)PrivateValue(display, "workCols");
+            string[] raw = PrivateValue(display, "workRaw") as string[];
+            bool[] covered = PrivateValue(display, "workCovered") as bool[];
+            bool[] overlayUsed = PrivateValue(display, "workOverlayUsed") as bool[];
+            int[] spanRows = PrivateValue(display, "workSpanRows") as int[];
+            int[] spanCols = PrivateValue(display, "workSpanCols") as int[];
+            float[] points = PrivateValue(display, "workPt") as float[];
+            float[] ys = PrivateValue(display, "workYs") as float[];
+            float[] hs = PrivateValue(display, "workHs") as float[];
+            TMP_Text[] columns = PrivateValue(display, "columns") as TMP_Text[];
+            float basePt = (float)PrivateValue(display, "workBasePt");
+            float basePx = (float)PrivateValue(display, "workBasePx");
+            bool failed = false;
+            float maxDelta = 0f;
+            for (int r = 0; r < rows; r++)
+            {
+                for (int c = 0; c < cols; c++)
+                {
+                    int cell = r * cols + c;
+                    if (raw == null || raw[cell] == "" || (covered != null && covered[cell]) || (overlayUsed != null && overlayUsed[cell])) continue;
+                    if ((spanRows != null && spanRows[cell] > 1) || (spanCols != null && spanCols[cell] > 1) || IsKnownOverflow(display, r, c)) continue;
+                    TMP_Text text = columns != null && c < columns.Length ? columns[c] : null;
+                    if (text == null || !text.gameObject.activeInHierarchy) continue;
+                    text.ForceMeshUpdate();
+                    TMP_CharacterInfo[] chars = text.textInfo.characterInfo;
+                    float visibleBottom = float.PositiveInfinity;
+                    float visibleTop = float.NegativeInfinity;
+                    bool hasVisibleGlyph = false;
+                    for (int k = 0; k < text.textInfo.characterCount && k < chars.Length; k++)
+                    {
+                        TMP_CharacterInfo character = chars[k];
+                        if (!character.isVisible || character.lineNumber - 1 != r) continue;
+                        Vector3 bottom = display.tableArea.InverseTransformPoint(text.transform.TransformPoint(character.bottomLeft));
+                        Vector3 top = display.tableArea.InverseTransformPoint(text.transform.TransformPoint(character.topLeft));
+                        visibleBottom = Mathf.Min(visibleBottom, bottom.y);
+                        visibleTop = Mathf.Max(visibleTop, top.y);
+                        hasVisibleGlyph = true;
+                    }
+                    if (!hasVisibleGlyph) continue;
+                    float cellCenter = display.tableArea.rect.yMax - ys[r] - hs[r] * 0.5f;
+                    float delta = Mathf.Abs((visibleBottom + visibleTop) * 0.5f - cellCenter);
+                    maxDelta = Mathf.Max(maxDelta, delta);
+                    float font = basePx;
+                    if (points != null && points[cell] > 0f && basePt > 0f) font *= Mathf.Clamp(points[cell] / basePt, 0.6f, 1.6f);
+                    float tolerance = Mathf.Max(2f, 0.15f * font);
+                    if (delta > tolerance)
+                    {
+                        failed = true;
+                        Debug.LogError("[SheetBoard] column vcenter violation: " + label + ", row=" + (r + 1) + ", col=" + (c + 1) + ", delta=" + delta.ToString("0.0") + "px, tolerance=" + tolerance.ToString("0.0") + "px");
+                    }
+                }
+            }
+            Debug.Log("[SheetBoard] column vcenter max delta: " + maxDelta.ToString("0.0") + " px: " + label);
+            if (!failed) Debug.Log("[SheetBoard] column vcenter check OK: " + label);
+            return failed;
+        }
+
         private static void RenderRange(SheetBoardDisplay display, SheetBoardSource source, string range, string path, Camera camera, RenderTexture renderTexture, Texture2D image)
         {
             display.rangeName = range;
@@ -441,6 +758,11 @@ namespace SheetBoardDev
             display.RenderNow();
             string label = range + "/" + (display.lightTheme ? "light" : "dark");
             if (AssertNoClipping(display, label) && !failedClipLabels.Contains(label)) failedClipLabels.Add(label);
+            if (AssertChipLayout(display, source, range, label) && !failedChipLabels.Contains(label)) failedChipLabels.Add(label);
+            if (AssertColumnVCenter(display, label))
+            {
+                if (!failedChipLabels.Contains(label)) failedChipLabels.Add(label);
+            }
             // _Watch drives the status line at runtime; it schedules Udon events, so mirror it here.
             display.statusText.text = source.GetStatusText();
             Canvas.ForceUpdateCanvases();

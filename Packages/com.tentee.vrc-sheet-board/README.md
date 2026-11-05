@@ -46,6 +46,8 @@ VRChat's String Loading only reads from an allowlist of hosts and Google is not 
 1. **Admin** — install the bundled Apps Script in the spreadsheet, then run **SheetBoard → はじめにセットアップ** and configure the ranges in **SheetBoard設定**.
 2. **World creator** — add the Source and Display prefabs, apply the URL, and set the viewing level if needed.
 
+When formatting is enabled for a range (column E in the settings tab), dropdowns are displayed as chips.
+
 The Japanese guide has the detailed setup steps, menu labels, status messages, and troubleshooting: [README.ja.md](README.ja.md#目次).
 
 ## Privacy and security
@@ -56,7 +58,7 @@ The Japanese guide has the detailed setup steps, menu labels, status messages, a
 
 ## Limits
 
-Conditional-format colours, borders, images/charts, emoji and font families are not reproduced. Up to 20 ranges, 100 × 20 cells each. Apps Script trigger runtime on consumer accounts is capped at 90 min/day; the runtime of very large ranges has not been measured.
+Conditional-format colours, borders, images/charts, emoji and font families are not reproduced. Borders are omitted to avoid expanding spreadsheet access permissions; thin grid lines are shown instead. Dropdown chip colours can be read from the source cells when a dropdown uses values from a range and those cells have colours. Otherwise, chips are coloured automatically by name; turn off the Display option for colouring chips by name to disable automatic colours. Dropdowns are displayed as chips regardless of their Sheets display style. Up to 20 ranges, 100 × 20 cells each. Apps Script trigger runtime on consumer accounts is capped at 90 min/day; the runtime of very large ranges has not been measured.
 
 The design and the JSON format are specified in `docs/SPEC.md`.
 

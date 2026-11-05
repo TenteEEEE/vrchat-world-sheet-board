@@ -107,6 +107,26 @@ test('formatting helpers handle colour, alignment, hidden cells and merges', () 
   assert.deepEqual(plain(c.parseAlignList('l,x')), []);
 });
 
+test('chipSwatch matches trimmed display values and normalizes swatch colours', () => {
+  const {context: c} = harness();
+  assert.deepEqual(plain(c.chipSwatch([['Empty', 'Dark']], [['#FFFFFF', '#B10202']], [['#000000', '#FFFFFF']], 'Empty')),
+    {bg: '', fg: ''});
+  assert.deepEqual(plain(c.chipSwatch([['Dark']], [['#b10202']], [['#990000']], ' Dark ')),
+    {bg: '#B10202', fg: '#990000'});
+  assert.equal(c.chipSwatch([['one']], [['#FF0000']], [['#000000']], 'two'), null);
+  assert.equal(c.chipSwatch(undefined, undefined, undefined, 'x'), null);
+});
+
+test('chipCode encodes hidden dropdowns, empty values, defaults, and partial swatches', () => {
+  const {context: c} = harness();
+  assert.equal(c.chipCode('x', false, null), '');
+  assert.equal(c.chipCode('', true, null), 'a');
+  assert.equal(c.chipCode('x', true, null), 'c');
+  assert.equal(c.chipCode('x', true, {bg: '#B10202', fg: '#FFFFFF'}), 'c|#B10202|#FFFFFF');
+  assert.equal(c.chipCode('x', true, {bg: '', fg: '#990000'}), 'c||#990000');
+  assert.equal(c.chipCode('x', true, {bg: '#FFE599', fg: ''}), 'c|#FFE599|');
+});
+
 test('payload keeps style layers, clips data and never emits bold', () => {
   const {context: c} = harness();
   const result = c.buildRangePayload([['x'.repeat(210), '']], [['#000000', '#abc']], {format: true, extra: {styles: [[1, 0]], bg: [['', '#FF0000']], rowh: [21], colw: [100, 200]}});
@@ -131,6 +151,17 @@ test('payload omits default formatting layers and keeps a layer when one cell di
     styles: [[0, 1]], bg: [['', '#FF0000']], ha: [['l', 'r']], wrap: [[0, 1]]
   }}).payload;
   for (const key of ['style', 'bg', 'ha', 'wrap', 'color']) assert.equal(key in changed, true);
+});
+
+test('payload emits chip layers, omits empty layers, and trims chip-only edges', () => {
+  const {context: c} = harness();
+  const populated = c.buildRangePayload([['x', 'y']], [], {extra: {chips: [['c', 'c||#990000']]}}).payload;
+  assert.deepEqual(plain(populated.chip), [['c', 'c||#990000']]);
+  const empty = c.buildRangePayload([['x']], [], {extra: {chips: [['']]}}).payload;
+  assert.equal('chip' in empty, false);
+  const clipped = c.buildRangePayload([['x', ''], ['', '']], [], {extra: {chips: [[''], ['', 'c']]}}).payload;
+  assert.deepEqual(plain(clipped.rows), [['x']]);
+  assert.equal('chip' in clipped, false);
 });
 
 test('status arrays truncate entries and fit within the document property limit', () => {
