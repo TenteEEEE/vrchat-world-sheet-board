@@ -29,7 +29,7 @@ jobs:
         with:
           node-version: '22'
       - name: Test Apps Script
-        run: node --test docs/SheetBoard/tests/appsscript.test.cjs
+        run: node --test docs/SheetBoard/tests/*.test.cjs
       - name: Build and validate release artifacts
         env:
           DRY_RUN: ${{ inputs.dry_run }}

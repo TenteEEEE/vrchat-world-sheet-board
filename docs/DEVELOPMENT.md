@@ -10,7 +10,7 @@ Before tagging a version, run these Unity batch entry points in order:
 2. `SheetBoardDevEditor.SheetBoardReleaseValidation.VerifyBatch` to test timestamp bounds, CDN rollback, in-flight status, prefab wiring, installation, and render eight sample images. Inspect `Logs/SheetBoardPreview*.png`.
 3. `SheetBoardDev.SheetBoardDevMenu.ExportUnityPackageBatch` to clear the dynamic font before saving distribution assets. The package contains its two serialized Udon programs under `Runtime/SerializedPrograms`.
 
-Run `node --test docs/SheetBoard/tests/appsscript.test.cjs` and `python Tools/build_release.py` from the repository root. Python validates the package metadata, preserved GUIDs, bundled Udon programs and empty font data, then builds deterministic ZIP and UnityPackage archives in `dist/`.
+Run `node --test docs/SheetBoard/tests/*.test.cjs` and `python Tools/build_release.py` from the repository root. Python validates the package metadata, preserved GUIDs, bundled Udon programs and empty font data, then builds deterministic ZIP and UnityPackage archives in `dist/`.
 
 Update `package.json` version, its download URL, the changelog and `docs/RELEASE_NOTES.md` before creating a matching bare SemVer tag (for example `0.1.0`). The release workflow tests and builds the files, then publishes a GitHub Release with the VPM ZIP, UnityPackage, package.json and SHA256SUMS. It refuses to overwrite an existing release.
 
