@@ -168,7 +168,6 @@ public bool autoFitColumns = true;     // 列幅と文字サイズを自動調�
 public float maxRowHeight = 64f;       // px
 public float columnGap = 12f;          // px。showGrid が OFF かつ colw を使わないとき有効
 public int maxOverlays = 24;           // プールごと
-public int maxChips = 64;              // チップと矢印のプール
 public bool chipAutoPalette = true;    // チップを名前ごとに自動配色
 public Color[] chipPalette;             // 自動配色パレット（10 色）
 public float nearCheckInterval = 1f;   // 秒。0.25〜1.5 にクランプ
@@ -212,7 +211,7 @@ Display Inspector では `rangeMissingText` と `sourceMissingText` を含むす
 
 ### 4.2 描画の構造
 
-兄弟順・描画順（奥から）: 格子の下地 → セル矩形 → ChipLayer → ArrowLayer → 列 TMP・オーバーレイ。チップと ▼ はそれぞれテンプレートから複製するプールで、両方の上限は `maxChips`。プールは初回描画で作り、以後 SetActive で再利用する。
+兄弟順・描画順（奥から）: 格子の下地 → セル矩形 → ChipLayer → ArrowLayer → 列 TMP・オーバーレイ。チップと ▼ はそれぞれテンプレートから複製するプールで、両方の配列長は `maxRows × maxCols`。GameObject は必要になった分だけ初回に遅延生成し、以後 SetActive で再利用する。
 
 - **列 TMP**: 列ごとに 1 つ。`columnTemplate` の親（RectMask2D の列枠）ごと複製する。セルは改行区切りで 1 列の TMP に並べる。テンプレートは折り返し OFF・overflow Overflow・richText ON・margin 0。
 - **セル矩形**: `cellTemplate` から必要になった分だけ作る（上限 `maxRows × maxCols`）。格子の下地も `cellTemplate` から 1 枚作る。

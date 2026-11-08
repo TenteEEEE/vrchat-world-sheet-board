@@ -4,6 +4,16 @@ All notable changes to this package are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-08
+
+### Fixed
+
+- Draw every dropdown chip. The chip pool stopped at 64, so later dropdown cells in larger ranges were shown as plain text.
+
+### Changed
+
+- Size the chip and arrow pools from `maxRows` × `maxCols`, still creating objects only when needed; removed Display `maxChips`.
+
 ## [0.3.0] - 2026-11-05
 
 ### Added

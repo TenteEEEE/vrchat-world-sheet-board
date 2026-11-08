@@ -70,7 +70,6 @@ namespace SheetBoardEditor
             display.showGrid = true;
             display.gridWidth = 1f;
             display.maxOverlays = 24;
-            display.maxChips = 64;
             display.textScale = 1.4f;
             display.zebra = false;
             Canvas canvas = CreateCanvas(root.transform, "Canvas", new Vector2(1600f, 1000f));

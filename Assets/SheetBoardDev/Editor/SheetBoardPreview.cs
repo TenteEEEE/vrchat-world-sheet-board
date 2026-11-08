@@ -102,7 +102,7 @@ namespace SheetBoardDev
                 RenderBusyRange(display, source, Path.Combine(temp, "SheetBoardPreview_busy.png"), camera, renderTexture, image);
                 string fidelityPath = Path.Combine(Path.GetDirectoryName("Assets/SheetBoardDev/Samples/sample.json"), "sample_fidelity.json");
                 string fidelityJson = File.ReadAllText(fidelityPath, Encoding.UTF8);
-                string[] ranges = { "event", "wraptest", "fitcase", "chips" };
+                string[] ranges = { "event", "wraptest", "fitcase", "chips", "manychips" };
                 string[] prefabPaths = { SheetBoardInstaller.DisplayPrefab, SheetBoardInstaller.DisplayDarkPrefab };
                 string[] themes = { "light", "dark" };
                 for (int r = 0; r < ranges.Length; r++)

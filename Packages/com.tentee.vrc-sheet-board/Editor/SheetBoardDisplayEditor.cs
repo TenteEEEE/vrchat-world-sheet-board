@@ -113,7 +113,6 @@ namespace SheetBoardEditor
             {
                 using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("showGrid").boolValue)) Draw("gridWidth");
                 Draw("maxOverlays");
-                Draw("maxChips");
                 Draw("nearCheckInterval");
             }
             showInternal = EditorGUILayout.Foldout(showInternal, "内部参照（通常は変更不要）", true);

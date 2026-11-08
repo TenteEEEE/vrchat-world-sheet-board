@@ -15,7 +15,7 @@ test('sample uses the preview-compatible format and bounded parallel layers', ()
   assert.equal(fixture.format, 'sheetboard/1');
   assert.match(fixture.rev, /^[a-f0-9]{8}$/);
   assert.equal(Math.floor(Date.parse(fixture.updated) / 1000), fixture.updatedUnix);
-  assert.deepEqual(Object.keys(ranges).sort(), ['chips', 'event', 'fitcase', 'wraptest']);
+  assert.deepEqual(Object.keys(ranges).sort(), ['chips', 'event', 'fitcase', 'manychips', 'wraptest']);
   for (const [id, range] of Object.entries(ranges)) {
     assert.ok(range.rows.length > 0 && range.rows.length <= 24, `${id} row bound`);
     const cols = range.rows[0].length;
@@ -82,7 +82,7 @@ test('chips cover explicit, automatic, blank, normalized-repeat and mixed-width 
   const implicit = cells.filter(cell => cell.marker === 'c');
   const marked = cells.filter(cell => cell.marker === 'c' || /^c\|#[0-9A-F]{6}\|#[0-9A-F]{6}$/i.test(cell.marker));
   assert.ok(marked.some(cell => /^c\|#[0-9A-F]{6}\|#[0-9A-F]{6}$/i.test(cell.marker)), 'explicit chip includes fill and text colors');
-  assert.ok(implicit.length >= 30 && cells.length <= 64, 'chip pool remains meaningfully exercised and bounded');
+  assert.ok(implicit.length >= 30, 'chips are meaningfully exercised');
   assert.ok(cells.some(cell => cell.marker === 'a' && cell.value === ''), 'blank cell carries arrow marker');
   assert.ok(implicit.some(cell => blankish(cell.value)), 'dash-like blank value has an implicit chip');
   assert.ok(marked.some(cell => /[ぁ-んァ-ヶ一-龠]/.test(cell.value)), 'Japanese text is shown inside a chip');
@@ -106,4 +106,14 @@ test('chips cover explicit, automatic, blank, normalized-repeat and mixed-width 
     'a whitespace-normalized implicit label repeats across multiple rows and columns');
   assert.ok([...positions.entries()].some(([name, group]) => name === '種子' && new Set(group.map(cell => cell.value)).size >= 2),
     'distinct raw whitespace variants normalize to the same implicit label');
+});
+
+test('manychips exceeds the former 64-chip pool limit', () => {
+  const range = ranges.manychips;
+  const markers = range.chip.flat();
+  const pills = markers.filter(marker => /^c(\|#[0-9A-F]{6}\|#[0-9A-F]{6})?$/i.test(marker));
+  assert.ok(pills.length > 64, `chip pills: ${pills.length}`);
+  assert.ok(pills.some(marker => marker !== 'c'), 'explicit colors are mixed in');
+  assert.ok(markers.some(marker => marker === 'a'), 'arrow-only cells are mixed in');
+  assert.ok(range.chip.some(row => row.every(marker => marker === '')), 'separator rows without chips are included');
 });

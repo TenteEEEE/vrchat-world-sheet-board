@@ -21,7 +21,6 @@ namespace SheetBoard
         public bool showGrid = true;
         public float gridWidth = 1f;
         public int maxOverlays = 24;
-        public int maxChips = 64;
         public float nearCheckInterval = 1f;
         public float maxRowHeight = 64f;
         public float textScale = 1.4f;
@@ -229,7 +228,7 @@ namespace SheetBoard
             columns = new TMP_Text[frames.Length];
             columnTextRects = new RectTransform[frames.Length];
             cells = new Image[Mathf.Max(0, maxRows) * frames.Length];
-            chips = new Image[Mathf.Max(0, maxChips)];
+            chips = new Image[Mathf.Max(0, maxRows) * frames.Length];
             arrows = new Image[chips.Length];
             overlayFrames = new RectTransform[Mathf.Max(0, maxOverlays)];
             overlays = new TMP_Text[overlayFrames.Length];
@@ -874,7 +873,7 @@ namespace SheetBoard
                 if (!warnedChipPool)
                 {
                     warnedChipPool = true;
-                    Debug.LogWarning("SheetBoardDisplay: chip or arrow template missing, or chip pool exhausted.");
+                    Debug.LogWarning("SheetBoardDisplay: chip pool unavailable. chipCount=" + chipCount + ", poolLength=" + chips.Length + ", check chip/arrow templates and capacity.");
                 }
                 chipPoolUnavailable = true;
                 return -1;
