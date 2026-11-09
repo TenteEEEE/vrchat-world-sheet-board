@@ -21,6 +21,7 @@ namespace SheetBoardDev
     {
         private static readonly List<string> failedClipLabels = new List<string>();
         private static readonly List<string> failedChipLabels = new List<string>();
+        private static readonly List<string> failedGlyphLabels = new List<string>();
         private const float OverlayPadding = 6f;
 
         private static string NormalizePaletteCheck(string value)
@@ -52,6 +53,7 @@ namespace SheetBoardDev
         {
             failedClipLabels.Clear();
             failedChipLabels.Clear();
+            failedGlyphLabels.Clear();
             VerifyWiring();
             EditorSceneManager.NewScene(NewSceneSetup.EmptyScene);
             GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(SheetBoardInstaller.DisplayPrefab);
@@ -61,6 +63,8 @@ namespace SheetBoardDev
             if (display == null) throw new InvalidOperationException("Display prefab has no SheetBoardDisplay.");
             GameObject sourceObject = new GameObject("Preview Source");
             SheetBoardSource source = sourceObject.AddUdonSharpComponent<SheetBoardSource>();
+            source.language = SheetBoardLanguage.Japanese;
+            display.language = SheetBoardLanguage.Japanese;
             display.source = source;
             string json = File.ReadAllText("Assets/SheetBoardDev/Samples/sample.json", Encoding.UTF8);
             if (!source.ApplyJson(json)) throw new InvalidOperationException("Invalid sample JSON.");
@@ -73,6 +77,7 @@ namespace SheetBoardDev
             display.rangeName = "";
             Canvas.ForceUpdateCanvases();
             display.RenderNow();
+            VerifyLanguage(source, display);
             if (display.titleText.text != "今週のイベント予定")
                 throw new InvalidOperationException("Empty rangeName did not render the first range.");
             GameObject cameraObject = new GameObject("Preview Camera");
@@ -118,6 +123,8 @@ namespace SheetBoardDev
                         if (display == null) throw new InvalidOperationException("Display prefab has no SheetBoardDisplay: " + prefabPaths[t]);
                         sourceObject = new GameObject("Preview Source");
                         source = sourceObject.AddUdonSharpComponent<SheetBoardSource>();
+                        source.language = SheetBoardLanguage.Japanese;
+                        display.language = SheetBoardLanguage.Japanese;
                         display.source = source;
                         if (!source.ApplyJson(fidelityJson) || source.GetRange(ranges[r]) == null)
                             throw new InvalidOperationException("Invalid fidelity sample or missing range: " + ranges[r]);
@@ -125,7 +132,29 @@ namespace SheetBoardDev
                         RenderRange(display, source, ranges[r], Path.Combine(temp, file), camera, renderTexture, image);
                     }
                 }
-                if (failedClipLabels.Count > 0 || failedChipLabels.Count > 0)
+                string stressJson = CreateStressJson();
+                string[] stressRanges = { "stress_grid", "stress_column", "escape" };
+                for (int r = 0; r < stressRanges.Length; r++)
+                {
+                    for (int t = 0; t < prefabPaths.Length; t++)
+                    {
+                        UnityEngine.Object.DestroyImmediate(board);
+                        UnityEngine.Object.DestroyImmediate(sourceObject);
+                        prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPaths[t]);
+                        board = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
+                        display = board.GetComponent<SheetBoardDisplay>();
+                        sourceObject = new GameObject("Preview Source");
+                        source = sourceObject.AddUdonSharpComponent<SheetBoardSource>();
+                        source.language = SheetBoardLanguage.Japanese;
+                        display.language = SheetBoardLanguage.Japanese;
+                        display.source = source;
+                        if (!source.ApplyJson(stressJson) || source.GetRange(stressRanges[r]) == null)
+                            throw new InvalidOperationException("Invalid stress sample or missing range: " + stressRanges[r]);
+                        string file = "SheetBoardPreview_" + stressRanges[r] + "_" + themes[t] + ".png";
+                        RenderRange(display, source, stressRanges[r], Path.Combine(temp, file), camera, renderTexture, image);
+                    }
+                }
+                if (failedClipLabels.Count > 0 || failedChipLabels.Count > 0 || failedGlyphLabels.Count > 0)
                 {
                     string failures = "";
                     for (int i = 0; i < failedClipLabels.Count; i++)
@@ -137,6 +166,11 @@ namespace SheetBoardDev
                     {
                         if (failures.Length > 0) failures += ", ";
                         failures += "chip=" + failedChipLabels[i];
+                    }
+                    for (int i = 0; i < failedGlyphLabels.Count; i++)
+                    {
+                        if (failures.Length > 0) failures += ", ";
+                        failures += "glyph=" + failedGlyphLabels[i];
                     }
                     throw new InvalidOperationException("[SheetBoard] preview checks failed for: " + failures);
                 }
@@ -150,6 +184,81 @@ namespace SheetBoardDev
                 UnityEngine.Object.DestroyImmediate(image);
                 UnityEngine.Object.DestroyImmediate(cameraObject);
             }
+        }
+        private static uint NextStress(uint state)
+        {
+            return unchecked(state * 1664525u + 1013904223u);
+        }
+        private static string CreateStressJson()
+        {
+            StringBuilder json = new StringBuilder(900000);
+            json.Append("{\"format\":\"sheetboard/1\",\"rev\":\"51b0a4e1\",\"updated\":\"2026-11-08T12:00:00+09:00\",\"updatedUnix\":1794106800,\"ranges\":{");
+            json.Append("\"stress_grid\":{\"title\":\"Stress grid\",\"header\":true,\"rows\":[");
+            uint seed = 0x51B0A4u;
+            for (int r = 0; r < 60; r++)
+            {
+                if (r > 0) json.Append(',');
+                json.Append('[');
+                for (int c = 0; c < 18; c++)
+                {
+                    if (c > 0) json.Append(',');
+                    seed = NextStress(seed);
+                    int pick = (int)(seed % 10u);
+                    if (pick < 6 || (r >= 52 && (r - 52) * 18 + c < 30))
+                    {
+                        seed = NextStress(seed);
+                        int length = 1 + (int)(seed % 40u);
+                        StringBuilder cell = new StringBuilder(length);
+                        for (int k = 0; k < length; k++)
+                        {
+                            seed = NextStress(seed);
+                            cell.Append((seed & 1u) == 0u ? (char)('A' + seed % 26u) : "日本語表組試験"[(int)(seed % 6u)]);
+                        }
+                        json.Append('"').Append(cell).Append('"');
+                    }
+                    else json.Append("\"\"");
+                }
+                json.Append(']');
+            }
+            json.Append("],\"wrap\":[");
+            for (int r = 0; r < 60; r++)
+            {
+                if (r > 0) json.Append(',');
+                json.Append('[');
+                for (int c = 0; c < 18; c++) { if (c > 0) json.Append(','); json.Append('1'); }
+                json.Append(']');
+            }
+            json.Append("],\"merges\":[");
+            for (int i = 0; i < 50; i++)
+            {
+                if (i > 0) json.Append(',');
+                int row = (i % 25) * 2;
+                if (i < 25) json.Append('[').Append(row).Append(",0,2,1]");
+                else json.Append('[').Append(row).Append(",2,1,2]");
+            }
+            json.Append("],\"chip\":[");
+            for (int r = 0; r < 60; r++)
+            {
+                if (r > 0) json.Append(',');
+                json.Append('[');
+                for (int c = 0; c < 18; c++)
+                {
+                    if (c > 0) json.Append(',');
+                    int n = r < 52 ? 30 : (r - 52) * 18 + c;
+                    json.Append(n < 30 ? (n % 3 == 0 ? "\"a\"" : "\"c\"") : "\"\"");
+                }
+                json.Append(']');
+            }
+            json.Append("]},\"stress_column\":{\"title\":\"Stress column\",\"header\":false,\"rows\":[");
+            for (int r = 0; r < 900; r++)
+            {
+                if (r > 0) json.Append(',');
+                json.Append("[\"");
+                for (int c = 0; c < 20 + r % 11; c++) json.Append("日本語表組試験"[c % 6]);
+                json.Append("\",\"").Append(r + 1).Append("\"]");
+            }
+            json.Append("]},\"escape\":{\"title\":\"Escape\",\"header\":false,\"rows\":[[\"a<b>c\",\"<\"],[\"<color=red>x</color>\",\"1 < 2 > 0\"],[\"</noparse>\",\"ESCAPE\"],[\"a<b>c\",\"<\"]]}}}");
+            return json.ToString();
         }
         private static void VerifyWiring()
         {
@@ -225,11 +334,11 @@ namespace SheetBoardDev
                 PrivateSet(source, "validUrlCount", 1);
                 PrivateSet(source, "inFlight", true);
                 PrivateInvoke(source, "UpdateStatus");
-                if (!source.IsBusy() || source.GetStatusLevel() != 0 || !source.GetStatusText().EndsWith(source.refreshingSuffix, StringComparison.Ordinal))
+                if (!source.IsBusy() || source.GetStatusLevel() != 0 || !source.GetStatusText().EndsWith(source.GetRefreshingSuffix(), StringComparison.Ordinal))
                     throw new InvalidOperationException("In-flight refresh did not preserve status level and append its suffix.");
                 PrivateSet(source, "inFlight", false);
                 PrivateInvoke(source, "UpdateStatus");
-                if (source.GetStatusText().EndsWith(source.refreshingSuffix, StringComparison.Ordinal))
+                if (source.GetStatusText().EndsWith(source.GetRefreshingSuffix(), StringComparison.Ordinal))
                     throw new InvalidOperationException("Idle source retained the refreshing suffix.");
                 source.RequestRefresh();
                 if (!source.IsBusy() || source.GetRefreshWaitSeconds() == 0f)
@@ -269,6 +378,63 @@ namespace SheetBoardDev
             if (method == null) throw new InvalidOperationException("Missing private method: " + name);
             method.Invoke(target, arguments);
         }
+        private static void VerifyLanguage(SheetBoardSource source, SheetBoardDisplay display)
+        {
+            bool failed = false;
+            SheetBoardLanguage oldSourceLanguage = source.language;
+            SheetBoardLanguage oldDisplayLanguage = display.language;
+            SheetBoardSource oldDisplaySource = display.source;
+            string oldUrlMissingText = source.urlMissingText;
+            string oldPermissionDeniedText = source.permissionDeniedText;
+            string oldRangeMissingText = display.rangeMissingText;
+            string oldSourceMissingText = display.sourceMissingText;
+            string oldRefreshIdleText = display.refreshIdleText;
+            string oldRangeName = display.rangeName;
+            source.language = SheetBoardLanguage.English;
+            display.language = SheetBoardLanguage.English;
+            source.urlMissingText = "URLが設定されていません";
+            PrivateInvoke(source, "ResolveLanguage");
+            source.permissionDeniedText = "";
+            if (source.GetPermissionDeniedText() != "You don't have permission to view this.") { Debug.LogError("[SheetBoard] language violation: empty Source override"); failed = true; }
+            if (source.GetRefreshingSuffix() != " · updating…") { Debug.LogError("[SheetBoard] language violation: English refreshing suffix"); failed = true; }
+            PrivateInvoke(source, "UpdateStatus");
+            if (source.GetStatusText() != "No URL is set.") { Debug.LogError("[SheetBoard] language violation: English Source status"); failed = true; }
+            source.urlMissingText = "Custom";
+            PrivateInvoke(source, "UpdateStatus");
+            if (source.GetStatusText() != "Custom") { Debug.LogError("[SheetBoard] language violation: custom Source override"); failed = true; }
+            source.permissionDeniedText = "閲覧権限がありません";
+            if (source.GetPermissionDeniedText() != "You don't have permission to view this.") { Debug.LogError("[SheetBoard] language violation: legacy Source override"); failed = true; }
+            display.rangeMissingText = "範囲「{name}」が見つかりません";
+            display.sourceMissingText = "Sourceが設定されていません";
+            display.refreshIdleText = "更新";
+            display.source = null;
+            PrivateInvoke(display, "ResolveLanguage");
+            PrivateInvoke(display, "RefreshIndicators", 2, false);
+            if (display.statusText == null || display.statusText.text != "No Source is set.") { Debug.LogError("[SheetBoard] language violation: English missing Source display"); failed = true; }
+            display.sourceMissingText = "Custom";
+            PrivateInvoke(display, "RefreshIndicators", 2, false);
+            if (display.statusText == null || display.statusText.text != "Custom") { Debug.LogError("[SheetBoard] language violation: custom Display override"); failed = true; }
+            PrivateInvoke(display, "UpdateRefreshButton", 2, false);
+            if (display.refreshLabel == null || display.refreshLabel.text != "Refresh") { Debug.LogError("[SheetBoard] language violation: English refresh button"); failed = true; }
+            display.source = source;
+            display.rangeName = "language_missing";
+            display.RenderNow();
+            if (display.titleText == null || display.titleText.text != "Range \"language_missing\" was not found.") { Debug.LogError("[SheetBoard] language violation: English missing range display"); failed = true; }
+            source.language = oldSourceLanguage;
+            source.urlMissingText = oldUrlMissingText;
+            source.permissionDeniedText = oldPermissionDeniedText;
+            display.language = oldDisplayLanguage;
+            display.source = oldDisplaySource;
+            display.rangeMissingText = oldRangeMissingText;
+            display.sourceMissingText = oldSourceMissingText;
+            display.refreshIdleText = oldRefreshIdleText;
+            display.rangeName = oldRangeName;
+            PrivateInvoke(source, "ResolveLanguage");
+            PrivateInvoke(source, "UpdateStatus");
+            PrivateInvoke(display, "ResolveLanguage");
+            display.RenderNow();
+            if (failed) throw new InvalidOperationException("Sheet Board language Preview checks failed.");
+        }
         private static void RenderBusyRange(SheetBoardDisplay display, SheetBoardSource source, string path, Camera camera, RenderTexture renderTexture, Texture2D image)
         {
             bool oldInFlight = (bool)PrivateValue(source, "inFlight");
@@ -302,7 +468,8 @@ namespace SheetBoardDev
                 tableMin = Vector2.Min(tableMin, local);
                 tableMax = Vector2.Max(tableMax, local);
             }
-            TMP_Text[] columns = PrivateValue(display, "columns") as TMP_Text[];
+            TMP_Text[] columns = PrivateValue(display, "segments") as TMP_Text[];
+            int[] segmentFirstRows = PrivateValue(display, "segmentFirstRow") as int[];
             int glyphs = 0;
             int violations = 0;
             int exempt = 0;
@@ -310,7 +477,8 @@ namespace SheetBoardDev
             {
                 TMP_Text text = texts[t];
                 if (text == null || !text.gameObject.activeInHierarchy) continue;
-                int columnIndex = ColumnIndex(columns, text);
+                int segmentIndex = SegmentIndex(display, text);
+                int columnIndex = ColumnIndex(display, text);
                 int overlayRow = -1;
                 int overlayCol = -1;
                 bool isColumn = columnIndex >= 0;
@@ -374,7 +542,7 @@ namespace SheetBoardDev
                     }
                     float horizontal = Mathf.Max(tableMin.x - left, right - tableMax.x, maskMin.x - left, right - maskMax.x);
                     float vertical = Mathf.Max(tableMin.y - bottom, top - tableMax.y, maskMin.y - bottom, top - maskMax.y);
-                    int row = isColumn ? character.lineNumber - 1 : overlayRow;
+                    int row = isColumn ? segmentFirstRows[segmentIndex] + character.lineNumber - 1 : overlayRow;
                     int col = isColumn ? columnIndex : overlayCol;
                     int workRows = (int)PrivateValue(display, "workRows");
                     int workCols = (int)PrivateValue(display, "workCols");
@@ -409,18 +577,34 @@ namespace SheetBoardDev
             return violations > 0;
         }
 
-        private static int ColumnIndex(TMP_Text[] columns, TMP_Text text)
+        private static int SegmentIndex(SheetBoardDisplay display, TMP_Text text)
         {
+            TMP_Text[] columns = PrivateValue(display, "segments") as TMP_Text[];
+            int count = (int)PrivateValue(display, "segmentCount");
             if (columns == null) return -1;
-            for (int i = 0; i < columns.Length; i++)
+            for (int i = 0; i < count && i < columns.Length; i++)
                 if (columns[i] == text) return i;
             return -1;
+        }
+        private static int ColumnIndex(SheetBoardDisplay display, TMP_Text text)
+        {
+            int index = SegmentIndex(display, text);
+            int[] columns = PrivateValue(display, "segmentColumn") as int[];
+            return index >= 0 && columns != null && index < columns.Length ? columns[index] : -1;
         }
 
         private static bool OverlayCell(SheetBoardDisplay display, TMP_Text text, out int row, out int col)
         {
             row = -1;
             col = -1;
+            TMP_Text[] pools = PrivateValue(display, "overlays") as TMP_Text[];
+            TMP_Text[] noWrapPools = PrivateValue(display, "overlaysNoWrap") as TMP_Text[];
+            int count = (int)PrivateValue(display, "overlayCount");
+            int noWrapCount = (int)PrivateValue(display, "overlayNoWrapCount");
+            bool found = false;
+            for (int i = 0; pools != null && i < count && i < pools.Length; i++) if (pools[i] == text) found = true;
+            for (int i = 0; !found && noWrapPools != null && i < noWrapCount && i < noWrapPools.Length; i++) if (noWrapPools[i] == text) found = true;
+            if (!found) return false;
             Transform current = text.transform;
             while (current.parent != null && current.parent != display.tableArea) current = current.parent;
             if (current.parent != display.tableArea) return false;
@@ -502,7 +686,8 @@ namespace SheetBoardDev
             float[] hs = PrivateValue(display, "workHs") as float[];
             Image[] chipImages = PrivateValue(display, "chips") as Image[];
             Image[] arrowImages = PrivateValue(display, "arrows") as Image[];
-            TMP_Text[] columns = PrivateValue(display, "columns") as TMP_Text[];
+            TMP_Text[] columns = PrivateValue(display, "segments") as TMP_Text[];
+            int segmentCount = (int)PrivateValue(display, "segmentCount");
             RectTransform chipLayer = PrivateValue(display, "chipContainer") as RectTransform;
             RectTransform arrowLayer = PrivateValue(display, "arrowContainer") as RectTransform;
             int expectedChips = 0;
@@ -540,7 +725,7 @@ namespace SheetBoardDev
                 for (int i = 0; i < cells.Length; i++)
                     if (cells[i] != null && cells[i].gameObject.activeInHierarchy && chipLayer != null && cells[i].transform.GetSiblingIndex() >= chipLayer.GetSiblingIndex()) failed = true;
             if (columns != null && arrowLayer != null)
-                for (int i = 0; i < columns.Length; i++)
+                for (int i = 0; i < segmentCount && i < columns.Length; i++)
                     if (columns[i] != null && columns[i].gameObject.activeInHierarchy && columns[i].transform.parent.GetSiblingIndex() <= arrowLayer.GetSiblingIndex()) failed = true;
             int pool = 0;
             float maxVCenterDelta = 0f;
@@ -634,7 +819,7 @@ namespace SheetBoardDev
                             for (int t = 0; t < texts.Length; t++)
                             {
                                 TMP_Text text = texts[t];
-                                int textColumn = ColumnIndex(columns, text);
+                                int textColumn = ColumnIndex(display, text);
                                 int overlayRow = -1;
                                 int overlayCol = -1;
                                 bool isColumn = textColumn >= 0;
@@ -646,7 +831,10 @@ namespace SheetBoardDev
                                 for (int k = 0; k < text.textInfo.characterCount && k < chars.Length; k++)
                                 {
                                     TMP_CharacterInfo character = chars[k];
-                                    if (!character.isVisible || (isColumn && character.lineNumber - 1 != r)) continue;
+                                    int[] segmentFirst = PrivateValue(display, "segmentFirstRow") as int[];
+                                    int segmentIndex = isColumn ? SegmentIndex(display, text) : -1;
+                                    int textRow = isColumn ? segmentFirst[segmentIndex] + character.lineNumber - 1 : overlayRow;
+                                    if (!character.isVisible || (isColumn && textRow != r)) continue;
                                     Vector3 a = display.tableArea.InverseTransformPoint(text.transform.TransformPoint(character.bottomLeft));
                                     Vector3 b = display.tableArea.InverseTransformPoint(text.transform.TransformPoint(character.bottomRight));
                                     Vector3 glyphTop = display.tableArea.InverseTransformPoint(text.transform.TransformPoint(character.topLeft));
@@ -703,7 +891,11 @@ namespace SheetBoardDev
             float[] points = PrivateValue(display, "workPt") as float[];
             float[] ys = PrivateValue(display, "workYs") as float[];
             float[] hs = PrivateValue(display, "workHs") as float[];
-            TMP_Text[] columns = PrivateValue(display, "columns") as TMP_Text[];
+            TMP_Text[] columns = PrivateValue(display, "segments") as TMP_Text[];
+            int[] segmentColumns = PrivateValue(display, "segmentColumn") as int[];
+            int[] segmentFirstRows = PrivateValue(display, "segmentFirstRow") as int[];
+            int[] segmentLastRows = PrivateValue(display, "segmentLastRow") as int[];
+            int segmentCount = (int)PrivateValue(display, "segmentCount");
             float basePt = (float)PrivateValue(display, "workBasePt");
             float basePx = (float)PrivateValue(display, "workBasePx");
             bool failed = false;
@@ -715,7 +907,12 @@ namespace SheetBoardDev
                     int cell = r * cols + c;
                     if (raw == null || raw[cell] == "" || (covered != null && covered[cell]) || (overlayUsed != null && overlayUsed[cell])) continue;
                     if ((spanRows != null && spanRows[cell] > 1) || (spanCols != null && spanCols[cell] > 1) || IsKnownOverflow(display, r, c)) continue;
-                    TMP_Text text = columns != null && c < columns.Length ? columns[c] : null;
+                    TMP_Text text = null;
+                    int segmentIndex = -1;
+                    for (int s = 0; columns != null && s < segmentCount && s < columns.Length; s++)
+                    {
+                        if (segmentColumns[s] == c && r >= segmentFirstRows[s] && r <= segmentLastRows[s]) { text = columns[s]; segmentIndex = s; break; }
+                    }
                     if (text == null || !text.gameObject.activeInHierarchy) continue;
                     text.ForceMeshUpdate();
                     TMP_CharacterInfo[] chars = text.textInfo.characterInfo;
@@ -725,7 +922,7 @@ namespace SheetBoardDev
                     for (int k = 0; k < text.textInfo.characterCount && k < chars.Length; k++)
                     {
                         TMP_CharacterInfo character = chars[k];
-                        if (!character.isVisible || character.lineNumber - 1 != r) continue;
+                        if (!character.isVisible || segmentFirstRows[segmentIndex] + character.lineNumber - 1 != r) continue;
                         Vector3 bottom = display.tableArea.InverseTransformPoint(text.transform.TransformPoint(character.bottomLeft));
                         Vector3 top = display.tableArea.InverseTransformPoint(text.transform.TransformPoint(character.topLeft));
                         visibleBottom = Mathf.Min(visibleBottom, bottom.y);
@@ -751,18 +948,229 @@ namespace SheetBoardDev
             return failed;
         }
 
+        private static bool IsPreviewWhitespace(char value)
+        {
+            return value == ' ' || (value >= '\t' && value <= '\r') || value == '\u0085' || value == '\u00A0' || value == '\u1680' || (value >= '\u2000' && value <= '\u200A') || value == '\u2028' || value == '\u2029' || value == '\u202F' || value == '\u205F' || value == '\u3000';
+        }
+        private static int ExpectedGlyphs(string value)
+        {
+            if (value == null) return 0;
+            int count = 0;
+            int limit = Math.Min(value.Length, 4000);
+            if (limit > 0 && limit < value.Length && char.IsHighSurrogate(value[limit - 1]) && char.IsLowSurrogate(value[limit])) limit--;
+            for (int i = 0; i < limit; i++)
+            {
+                char c = value[i];
+                if (IsPreviewWhitespace(c)) continue;
+                count++;
+                if (char.IsHighSurrogate(c) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1])) i++;
+            }
+            if (value.Length > 4000) count++;
+            return count;
+        }
+        private static string PreviewValue(DataToken token)
+        {
+            if (token.TokenType == TokenType.String) return token.String == null ? "" : token.String;
+            if (token.TokenType == TokenType.Int) return token.Int.ToString();
+            if (token.TokenType == TokenType.Long) return token.Long.ToString();
+            if (token.TokenType == TokenType.Double) return token.Double.ToString();
+            return "";
+        }
+        private static int ExpectedGlyphsFromData(DataDictionary range)
+        {
+            DataToken rowsToken;
+            if (range == null || !range.TryGetValue("rows", out rowsToken) || rowsToken.TokenType != TokenType.DataList) return 0;
+            DataList rows = rowsToken.DataList;
+            int rowCount = rows.Count;
+            int columnCount = 0;
+            for (int r = 0; r < rowCount; r++)
+            {
+                if (rows[r].TokenType == TokenType.DataList) columnCount = Math.Max(columnCount, rows[r].DataList.Count);
+            }
+            if (rowCount == 0 || columnCount == 0) return 0;
+            string[] raw = new string[rowCount * columnCount];
+            bool[] covered = new bool[raw.Length];
+            int[] spanRows = new int[raw.Length];
+            for (int r = 0; r < rowCount; r++)
+            {
+                if (rows[r].TokenType != TokenType.DataList) continue;
+                DataList row = rows[r].DataList;
+                for (int c = 0; c < row.Count; c++) raw[r * columnCount + c] = PreviewValue(row[c]);
+            }
+            DataToken mergesToken;
+            if (range.TryGetValue("merges", out mergesToken) && mergesToken.TokenType == TokenType.DataList)
+            {
+                DataList merges = mergesToken.DataList;
+                for (int i = 0; i < merges.Count; i++)
+                {
+                    if (merges[i].TokenType != TokenType.DataList || merges[i].DataList.Count < 4) continue;
+                    DataList merge = merges[i].DataList;
+                    int r = (int)PreviewNumber(merge[0]);
+                    int c = (int)PreviewNumber(merge[1]);
+                    int rh = (int)PreviewNumber(merge[2]);
+                    int cw = (int)PreviewNumber(merge[3]);
+                    if (r < 0 || c < 0 || r >= rowCount || c >= columnCount || rh < 1 || cw < 1) continue;
+                    rh = Math.Min(rh, rowCount - r);
+                    cw = Math.Min(cw, columnCount - c);
+                    if (rh == 1 && cw == 1) continue;
+                    bool overlaps = false;
+                    for (int rr = r; rr < r + rh; rr++)
+                    {
+                        for (int cc = c; cc < c + cw; cc++)
+                        {
+                            int cell = rr * columnCount + cc;
+                            if (covered[cell] || spanRows[cell] > 0) overlaps = true;
+                        }
+                    }
+                    if (overlaps) continue;
+                    spanRows[r * columnCount + c] = rh;
+                    for (int rr = r; rr < r + rh; rr++)
+                    {
+                        for (int cc = c; cc < c + cw; cc++)
+                        {
+                            if (rr != r || cc != c) covered[rr * columnCount + cc] = true;
+                        }
+                    }
+                }
+            }
+            int expected = 0;
+            for (int i = 0; i < raw.Length; i++)
+            {
+                if (!covered[i]) expected += ExpectedGlyphs(raw[i]);
+            }
+            return expected;
+        }
+        private static double PreviewNumber(DataToken token)
+        {
+            if (token.TokenType == TokenType.Int) return token.Int;
+            if (token.TokenType == TokenType.Long) return token.Long;
+            if (token.TokenType == TokenType.Double) return token.Double;
+            return 0d;
+        }
+        private static bool AssertGlyphCount(SheetBoardDisplay display, string label)
+        {
+            TMP_Text[] segments = PrivateValue(display, "segments") as TMP_Text[];
+            TMP_Text[] overlays = PrivateValue(display, "overlays") as TMP_Text[];
+            TMP_Text[] noWrap = PrivateValue(display, "overlaysNoWrap") as TMP_Text[];
+            int segmentCount = (int)PrivateValue(display, "segmentCount");
+            int overlayCount = (int)PrivateValue(display, "overlayCount");
+            int noWrapCount = (int)PrivateValue(display, "overlayNoWrapCount");
+            string[] raw = PrivateValue(display, "workRaw") as string[];
+            bool[] covered = PrivateValue(display, "workCovered") as bool[];
+            int rows = (int)PrivateValue(display, "workRows");
+            int cols = (int)PrivateValue(display, "workCols");
+            DataDictionary range = display.source == null ? null : display.source.GetRange(display.rangeName);
+            int expected = ExpectedGlyphsFromData(range);
+            int cells = 0;
+            for (int i = 0; raw != null && i < rows * cols && i < raw.Length; i++)
+            {
+                if (covered != null && covered[i]) continue;
+                cells++;
+            }
+            int visible = 0;
+            int vertices = 0;
+            int activeTexts = 0;
+            for (int group = 0; group < 3; group++)
+            {
+                TMP_Text[] pool = group == 0 ? segments : (group == 1 ? overlays : noWrap);
+                int used = group == 0 ? segmentCount : (group == 1 ? overlayCount : noWrapCount);
+                for (int i = 0; pool != null && i < used && i < pool.Length; i++)
+                {
+                    TMP_Text text = pool[i];
+                    if (text == null || !text.gameObject.activeInHierarchy) continue;
+                    activeTexts++;
+                    text.ForceMeshUpdate();
+                    for (int k = 0; k < text.textInfo.characterCount && k < text.textInfo.characterInfo.Length; k++)
+                        if (text.textInfo.characterInfo[k].isVisible) visible++;
+                    if (group == 0 && text.textInfo.characterCount > 0) visible--;
+                    for (int m = 0; m < text.textInfo.meshInfo.Length; m++) vertices += text.textInfo.meshInfo[m].vertexCount;
+                }
+            }
+            visible = Mathf.Max(0, visible);
+            Image[] images = display.tableArea.GetComponentsInChildren<Image>(false);
+            int activeImages = 0;
+            for (int i = 0; i < images.Length; i++) if (images[i] != null && images[i].gameObject.activeInHierarchy) { activeImages++; vertices += 4; }
+            Image[] chipImages = PrivateValue(display, "chips") as Image[];
+            int activeChips = 0;
+            for (int i = 0; chipImages != null && i < chipImages.Length; i++) if (chipImages[i] != null && chipImages[i].gameObject.activeInHierarchy) activeChips++;
+            int gameObjects = (int)PrivateValue(display, "cellCreatedCount") + (int)PrivateValue(display, "overlayCreatedCount") + (int)PrivateValue(display, "overlayNoWrapCreatedCount") + (int)PrivateValue(display, "segmentCreatedCount") + (int)PrivateValue(display, "chipCreatedCount") * 2;
+            bool failed = visible != expected;
+            Debug.Log("[SheetBoard] stats " + label + " segments=" + segmentCount + " overlays=" + (overlayCount + noWrapCount) + " cells=" + cells + " chips=" + activeChips + " vertices=" + vertices + " gameObjects=" + gameObjects);
+            if (failed) Debug.LogError("[SheetBoard] glyph count violation: " + label + " visible=" + visible + " expected(from data)=" + expected + " tmps=" + activeTexts);
+            if (label.StartsWith("escape/", StringComparison.Ordinal))
+            {
+                int[] segmentColumns = PrivateValue(display, "segmentColumn") as int[];
+                int[] segmentFirst = PrivateValue(display, "segmentFirstRow") as int[];
+                for (int cell = 0; raw != null && cell < rows * cols && cell < raw.Length; cell++)
+                {
+                    StringBuilder actual = new StringBuilder();
+                    int row = cell / cols;
+                    int col = cell % cols;
+                    for (int group = 0; group < 3; group++)
+                    {
+                        TMP_Text[] pool = group == 0 ? segments : (group == 1 ? overlays : noWrap);
+                        int used = group == 0 ? segmentCount : (group == 1 ? overlayCount : noWrapCount);
+                        for (int i = 0; pool != null && i < used && i < pool.Length; i++)
+                        {
+                            TMP_Text text = pool[i];
+                            if (text == null || !text.gameObject.activeInHierarchy) continue;
+                            bool match = false;
+                            int first = 0;
+                            if (group == 0 && segmentColumns[i] == col && row >= segmentFirst[i] && row <= ((int[])PrivateValue(display, "segmentLastRow"))[i])
+                            {
+                                match = true;
+                                first = segmentFirst[i];
+                            }
+                            else if (group != 0)
+                            {
+                                int overlayRow, overlayCol;
+                                match = OverlayCell(display, text, out overlayRow, out overlayCol) && overlayRow == row && overlayCol == col;
+                            }
+                            if (!match) continue;
+                            text.ForceMeshUpdate();
+                            for (int k = 0; k < text.textInfo.characterCount && k < text.textInfo.characterInfo.Length; k++)
+                            {
+                                TMP_CharacterInfo character = text.textInfo.characterInfo[k];
+                                if (group == 0 && (character.lineNumber == 0 || first + character.lineNumber - 1 != row)) continue;
+                                char value = character.character;
+                                if (value == '\u200B' || value == '\u25A1') failed = true;
+                                if (!IsPreviewWhitespace(value) && value != '\u200B') actual.Append(value);
+                            }
+                        }
+                    }
+                    StringBuilder wanted = new StringBuilder();
+                    for (int k = 0; k < raw[cell].Length; k++) if (!IsPreviewWhitespace(raw[cell][k])) wanted.Append(raw[cell][k]);
+                    if (actual.ToString() != wanted.ToString())
+                    {
+                        failed = true;
+                        Debug.LogError("[SheetBoard] escape violation: " + label + " row=" + (row + 1) + " col=" + (col + 1) + " actual=\"" + actual + "\" expected=\"" + wanted + "\"");
+                    }
+                }
+                if (failed) Debug.LogError("[SheetBoard] escape violation: " + label + " contains an unexpected glyph");
+            }
+            return failed;
+        }
+
         private static void RenderRange(SheetBoardDisplay display, SheetBoardSource source, string range, string path, Camera camera, RenderTexture renderTexture, Texture2D image)
         {
             display.rangeName = range;
             Canvas.ForceUpdateCanvases();
             display.RenderNow();
             string label = range + "/" + (display.lightTheme ? "light" : "dark");
-            if (AssertNoClipping(display, label) && !failedClipLabels.Contains(label)) failedClipLabels.Add(label);
-            if (AssertChipLayout(display, source, range, label) && !failedChipLabels.Contains(label)) failedChipLabels.Add(label);
-            if (AssertColumnVCenter(display, label))
+            if (range.StartsWith("stress_", StringComparison.Ordinal))
             {
-                if (!failedChipLabels.Contains(label)) failedChipLabels.Add(label);
+                Debug.Log("[SheetBoard] layout checks skipped (stress): " + label);
             }
+            else
+            {
+                if (AssertNoClipping(display, label) && !failedClipLabels.Contains(label)) failedClipLabels.Add(label);
+                if (AssertChipLayout(display, source, range, label) && !failedChipLabels.Contains(label)) failedChipLabels.Add(label);
+                if (AssertColumnVCenter(display, label))
+                {
+                    if (!failedChipLabels.Contains(label)) failedChipLabels.Add(label);
+                }
+            }
+            if (AssertGlyphCount(display, label) && !failedGlyphLabels.Contains(label)) failedGlyphLabels.Add(label);
             // _Watch drives the status line at runtime; it schedules Udon events, so mirror it here.
             display.statusText.text = source.GetStatusText();
             Canvas.ForceUpdateCanvases();

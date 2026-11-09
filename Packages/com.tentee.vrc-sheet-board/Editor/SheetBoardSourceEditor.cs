@@ -63,6 +63,8 @@ namespace SheetBoardEditor
             EditorGUILayout.LabelField("基本設定", EditorStyles.boldLabel);
             EditorGUILayout.PropertyField(
                 serializedObject.FindProperty("baseUrl"), new GUIContent("ベース URL"));
+            EditorGUILayout.PropertyField(
+                serializedObject.FindProperty("language"), new GUIContent("表示言語（自動 = 見る人の VRChat の言語）"));
             serializedObject.ApplyModifiedProperties();
             serializedObject.Update();
             EditorGUILayout.HelpBox("通常はURLを貼り付けて適用し、接続を確認するだけで始められます。", MessageType.Info);
@@ -133,7 +135,7 @@ namespace SheetBoardEditor
                 Draw("manualCooldown");
                 Draw("startDelayMax");
             }
-            showTexts = EditorGUILayout.Foldout(showTexts, "状態表示の文言", true);
+            showTexts = EditorGUILayout.Foldout(showTexts, "文言の上書き（空欄なら表示言語の既定文言）", true);
             if (showTexts)
             {
                 EditorGUILayout.HelpBox("{code} = エラー、{s} = 秒、{time} = 更新時刻、{ago} = 経過時間", MessageType.Info);

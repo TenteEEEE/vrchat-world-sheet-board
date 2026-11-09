@@ -19,6 +19,7 @@ namespace SheetBoardDevEditor
             {
                 EditorSceneManager.NewScene(NewSceneSetup.EmptyScene);
                 SheetBoardSource source = new GameObject("Regression Source").AddUdonSharpComponent<SheetBoardSource>();
+                source.language = SheetBoardLanguage.Japanese;
                 source.urls = new[] { new VRCUrl("https://gist.githubusercontent.com/test/sheetboard.json") };
                 Set(source, "validUrlCount", 1);
                 long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();

@@ -76,6 +76,32 @@ function harness({user = {token: 'test-token', login: 'admin'}, doc = {}, fetch,
   return {context, users, shared, requests, mails, triggers, dialogs, lockWaits, userLockWaits, get releases() { return releases; }};
 }
 
+function configureReadableSheet(h, config, {rows = 1, cols = 1, filter = false, hiddenRows = new Set()} = {}) {
+  let filterCalls = 0;
+  const cell = {
+    getRow: () => 1, getColumn: () => 1, getNumRows: () => rows, getNumColumns: () => cols,
+    getDisplayValues: () => Array.from({length: rows}, (_, r) => Array.from({length: cols}, (_, c) => `r${r + 1}c${c + 1}`)),
+    getDataValidations: () => Array.from({length: rows}, () => Array(cols).fill(null)),
+    getMergedRanges: () => []
+  };
+  const source = {
+    getName: () => 'Source', getLastRow: () => rows, getLastColumn: () => cols,
+    getRange: () => cell, getFilter: () => { filterCalls++; return filter ? {} : null; },
+    isRowHiddenByUser: () => false, isRowHiddenByFilter: row => hiddenRows.has(row),
+    isColumnHiddenByUser: () => false
+  };
+  const settings = {
+    getLastRow: () => config.length + 1,
+    getRange: () => ({getValues: () => config})
+  };
+  h.context.SpreadsheetApp.getActiveSpreadsheet = () => ({
+    getSheetByName: name => name === 'SheetBoard設定' ? settings : name === 'Source' ? source : null,
+    getSheets: () => [source], getUrl: () => 'https://example.test/sheet'
+  });
+  h.context.readRanges_ = h.context.__readRanges_;
+  return {getFilterCalls: () => filterCalls};
+}
+
 test('range references accept quoted, apostrophe-stripped and bare forms', () => {
   const {context: c} = harness();
   for (const text of ["予定表!A1:C10", "'予定表'!A1:C10", "予定表'!A1:C10"]) assert.deepEqual(plain(c.parseRangeRef(text)), {sheet: '予定表', a1: 'A1:C10'});
@@ -127,17 +153,17 @@ test('chipCode encodes hidden dropdowns, empty values, defaults, and partial swa
   assert.equal(c.chipCode('x', true, {bg: '#FFE599', fg: ''}), 'c|#FFE599|');
 });
 
-test('payload keeps style layers, clips data and never emits bold', () => {
+test('payload preserves large rows, columns, and cell text without clipping', () => {
   const {context: c} = harness();
-  const result = c.buildRangePayload([['x'.repeat(210), '']], [['#000000', '#abc']], {format: true, extra: {styles: [[1, 0]], bg: [['', '#FF0000']], rowh: [21], colw: [100, 200]}});
-  assert.equal(result.payload.rows[0][0].length, 200);
+  const result = c.buildRangePayload([['x'.repeat(1000), '']], [['#000000', '#abc']], {format: true, extra: {styles: [[1, 0]], bg: [['', '#FF0000']], rowh: [21], colw: [100, 200]}});
+  assert.equal(result.payload.rows[0][0].length, 1000);
   assert.deepEqual(plain(result.payload.style), [[1, 0]]);
   assert.deepEqual(plain(result.payload.color), [['', '#AABBCC']]);
   assert.equal('bold' in result.payload, false);
-  assert.equal(result.warnings.length, 1);
-  const clipped = c.buildRangePayload(Array.from({length: 101}, () => Array(21).fill('x')), [], {});
-  assert.equal(clipped.payload.rows.length, 100);
-  assert.equal(clipped.payload.rows[0].length, 20);
+  assert.deepEqual(plain(result.warnings), []);
+  const large = c.buildRangePayload(Array.from({length: 150}, () => Array(30).fill('x')), [], {});
+  assert.equal(large.payload.rows.length, 150);
+  assert.equal(large.payload.rows[0].length, 30);
 });
 
 test('payload omits default formatting layers and keeps a layer when one cell differs', () => {
@@ -164,13 +190,114 @@ test('payload emits chip layers, omits empty layers, and trims chip-only edges',
   assert.equal('chip' in clipped, false);
 });
 
-test('status arrays truncate entries and fit within the document property limit', () => {
+test('status arrays fit within the document property limit by UTF-8 bytes', () => {
   const {context: c} = harness();
-  const input = Array(100).fill('x'.repeat(160));
+  const input = Array(100).fill('日'.repeat(120));
   input[input.length - 1] = '';
   const values = c.boundedStatusArray_(input);
   assert.ok(values.every(value => value.length <= 120));
-  assert.ok(JSON.stringify(plain(values)).length <= 8000);
+  assert.ok(Buffer.byteLength(JSON.stringify(plain(values)), 'utf8') <= 8000);
+});
+
+test('readRanges_ publishes 150 rows and 30 columns without applying former caps', () => {
+  const h = harness();
+  configureReadableSheet(h, [['wide', 'Source!A1:AD150']], {rows: 150, cols: 30});
+  const range = h.context.readRanges_().ranges.wide;
+  assert.equal(range.rows.length, 150);
+  assert.equal(range.rows[0].length, 30);
+});
+
+test('readRanges_ publishes 25 configured ranges', () => {
+  const h = harness();
+  const config = Array.from({length: 25}, (_, index) => [`range${index + 1}`, 'Source!A1']);
+  configureReadableSheet(h, config);
+  assert.equal(Object.keys(plain(h.context.readRanges_().ranges)).length, 25);
+});
+
+test('readRanges_ warns on a large visible range without rejecting it', () => {
+  const h = harness();
+  configureReadableSheet(h, [['large', 'Source!A1:BS71']], {rows: 71, cols: 71});
+  const result = h.context.readRanges_();
+  assert.equal(result.ranges.large.rows.length, 71);
+  assert.match(result.rowStatus[0], /範囲が大きいため、公開に時間がかかり、掲示板の文字がとても小さくなります/);
+});
+
+test('readRanges_ keeps only the 40 visible rows in a 300-row filtered range', () => {
+  const h = harness();
+  const hiddenRows = new Set(Array.from({length: 300}, (_, index) => index + 1).filter(row => row < 201 || row > 240));
+  const sheet = configureReadableSheet(h, [['filtered', 'Source!A1:A300']], {rows: 300, filter: true, hiddenRows});
+  const range = h.context.readRanges_().ranges.filtered;
+  assert.equal(range.rows.length, 40);
+  assert.equal(range.rows[0][0], 'r201c1');
+  assert.equal(range.rows.at(-1)[0], 'r240c1');
+  assert.equal(sheet.getFilterCalls(), 1);
+});
+
+test('readRanges_ does not call isRowHiddenByFilter when the sheet has no filter', () => {
+  const h = harness();
+  let filterRowCalls = 0;
+  const sheet = configureReadableSheet(h, [['plain', 'Source!A1']], {rows: 1});
+  const source = h.context.SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Source');
+  source.isRowHiddenByFilter = () => { filterRowCalls++; return false; };
+  h.context.readRanges_();
+  assert.equal(sheet.getFilterCalls(), 1);
+  assert.equal(filterRowCalls, 0);
+});
+
+test('publish_ stops before PATCH when its execution budget is exceeded', () => {
+  const h = harness({doc: {gistId: 'existing', gistOwner: 'admin', worldUrl: 'https://example.test/world'}});
+  configureReadableSheet(h, [['range', 'Source!A1']]);
+  let notified = false;
+  const notifyError = h.context.notifyError_;
+  h.context.notifyError_ = (...args) => { notified = true; return notifyError(...args); };
+  let clockCalls = 0;
+  h.context.nowMillis_ = () => clockCalls++ === 0 ? 1000 : 271001;
+  assert.throws(() => h.context.publish_(true), /表が大きすぎて、時間内に読み切れませんでした/);
+  assert.equal(h.requests.filter(request => request.method === 'patch').length, 0);
+  assert.equal(h.shared.data.lastPublishStatus, 'failure');
+  assert.match(h.shared.data.lastError, /エラー番号 408/);
+  assert.equal(notified, true);
+});
+
+test('publish_ rejects JSON over 10 MB before PATCH', () => {
+  const h = harness({doc: {gistId: 'existing', gistOwner: 'admin', worldUrl: 'https://example.test/world'}});
+  h.context.readRanges_ = () => ({ranges: {large: {rows: [['x'.repeat(10 * 1024 * 1024)]]}}, warnings: [], rowStatus: []});
+  assert.throws(() => h.context.publish_(true), /掲示板に出す内容が 10MB を超えたため公開できません/);
+  assert.equal(h.requests.filter(request => request.method === 'patch').length, 0);
+  assert.equal(h.shared.data.lastPublishStatus, 'failure');
+});
+
+test('publish_ keeps the iPhone warning when a large unchanged payload skips PATCH', () => {
+  const h = harness({doc: {gistId: 'existing', gistOwner: 'admin', worldUrl: 'https://example.test/world'}});
+  h.context.readRanges_ = () => ({ranges: {large: {rows: [['x'.repeat(820 * 1024)]]}}, warnings: [], rowStatus: []});
+  assert.equal(h.context.publish_(true), true);
+  assert.equal(h.requests.filter(request => request.method === 'patch').length, 1);
+  assert.match(h.shared.data.warnings, /掲示板の内容が大きいため、iPhone 版 VRChat では表示できないことがあります/);
+  assert.ok(Number(h.shared.data.lastContentBytes) > 800 * 1024);
+  h.shared.data.lastPublishMillis = String(Date.now());
+  assert.equal(h.context.publish_(false), true);
+  assert.equal(h.requests.filter(request => request.method === 'patch').length, 1);
+  assert.match(h.shared.data.warnings, /掲示板の内容が大きいため、iPhone 版 VRChat では表示できないことがあります/);
+});
+
+test('publish_ keeps Japanese rowStatus within 8000 UTF-8 bytes', () => {
+  const h = harness();
+  h.context.readRanges_ = () => ({ranges: {one: {rows: [['x']]}}, warnings: [], rowStatus: Array(100).fill('注意'.repeat(60))});
+  assert.equal(h.context.publish_(true), true);
+  assert.ok(Buffer.byteLength(h.shared.data.rowStatus, 'utf8') <= 8000);
+});
+
+test('publish_ publishes when publishedNames exceeds 8000 bytes and reports omitted names neutrally', () => {
+  const h = harness();
+  const ranges = Object.fromEntries(Array.from({length: 1200}, (_, index) => [`range${index}`, {rows: [['x']]}]));
+  h.context.readRanges_ = () => ({ranges, warnings: [], rowStatus: []});
+  assert.equal(h.context.publish_(true), true);
+  assert.ok(Buffer.byteLength(h.shared.data.publishedNames, 'utf8') <= 8000);
+  assert.equal(h.shared.data.publishedNamesIncomplete, 'true');
+  assert.equal(Number(h.shared.data.publishedNameCount), 1200);
+  assert.doesNotMatch(h.context.overallStatus_().text, /掲示板に出す範囲がありません/);
+  h.context.showStatus();
+  assert.match(h.dialogs.at(-1)[1], /ほか \d+ 件/);
 });
 
 test('stable hashing input and explicit timezone offsets', () => {
@@ -266,7 +393,7 @@ test('legacy owner is adopted and successful publish clears failure suppression'
 test('a failed PATCH leaves the previously published Gist document intact', () => {
   let remote = {ranges: {old: {rows: [['old']]} }};
   let attempted;
-  const h = harness({user: {token: 'test-token', login: 'admin'}, doc: {gistId: 'existing', gistOwner: 'admin', worldUrl: 'keep'}, fetch: request => {
+  const h = harness({user: {token: 'test-token', login: 'admin'}, doc: {gistId: 'existing', gistOwner: 'admin', worldUrl: 'keep', lastContentBytes: '123'}, fetch: request => {
     if (request.url.endsWith('/gists/existing') && request.method === 'patch') {
       attempted = JSON.parse(request.payload).files['sheetboard.json'].content;
       return {status: 500, body: {message: 'failed'}};
@@ -280,6 +407,7 @@ test('a failed PATCH leaves the previously published Gist document intact', () =
   assert.throws(() => h.context.publish_(true), /GitHubへの公開に失敗しました/);
   assert.notEqual(attempted, original);
   assert.equal(JSON.stringify(remote), original);
+  assert.equal(h.shared.data.lastContentBytes, '123');
 });
 
 test('old administrator timer stops after handoff without writing shared state or sending mail', () => {

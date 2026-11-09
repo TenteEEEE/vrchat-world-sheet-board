@@ -40,6 +40,7 @@ namespace SheetBoardEditor
             SheetBoardDisplay display = (SheetBoardDisplay)target;
             EditorGUILayout.LabelField("基本設定", EditorStyles.boldLabel);
             EditorGUILayout.PropertyField(serializedObject.FindProperty("source"), Label("source"));
+            EditorGUILayout.PropertyField(serializedObject.FindProperty("language"), new GUIContent("表示言語（自動 = 見る人の VRChat の言語）"));
             DrawRange(serializedObject.FindProperty("rangeName"));
             if (display.source == null)
             {
@@ -71,8 +72,6 @@ namespace SheetBoardEditor
                 Draw("lightTheme");
                 Draw("textScale");
                 Draw("autoFitColumns");
-                Draw("maxRows");
-                Draw("maxCols");
                 Draw("showTitle");
                 Draw("showGrid");
                 Draw("zebra");
@@ -101,7 +100,7 @@ namespace SheetBoardEditor
                 Draw("refreshDisabledColor");
                 Draw("refreshDisabledLabelColor");
             }
-            showTexts = EditorGUILayout.Foldout(showTexts, "文言（任意）", true);
+            showTexts = EditorGUILayout.Foldout(showTexts, "文言の上書き（空欄なら表示言語の既定文言）", true);
             if (showTexts)
             {
                 Draw("rangeMissingText");
@@ -112,7 +111,6 @@ namespace SheetBoardEditor
             if (showAdvanced)
             {
                 using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("showGrid").boolValue)) Draw("gridWidth");
-                Draw("maxOverlays");
                 Draw("nearCheckInterval");
             }
             showInternal = EditorGUILayout.Foldout(showInternal, "内部参照（通常は変更不要）", true);
@@ -189,14 +187,11 @@ namespace SheetBoardEditor
                 case "gridColor": return new GUIContent("格子の色");
                 case "showGrid": return new GUIContent("格子を表示");
                 case "gridWidth": return new GUIContent("格子の太さ（px）");
-                case "maxOverlays": return new GUIContent("重ね表示の上限");
                 case "background": return new GUIContent("背景");
                 case "overlayTemplate": return new GUIContent("重ね表示テンプレート");
                 case "overlayNoWrapTemplate": return new GUIContent("重ね表示テンプレート（折り返しなし）");
                 case "textScale": return new GUIContent("文字の拡大率");
                 case "autoFitColumns": return new GUIContent("列幅を自動調整", "文字が列に収まるよう列幅と文字サイズを自動で決める");
-                case "maxRows": return new GUIContent("最大行数");
-                case "maxCols": return new GUIContent("最大列数");
                 case "showTitle": return new GUIContent("タイトルを表示");
                 case "zebra": return new GUIContent("交互の行背景");
                 case "nearCheckInterval": return new GUIContent("近接確認間隔（秒）");

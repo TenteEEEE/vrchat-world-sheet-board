@@ -5,16 +5,56 @@
 const GITHUB_CLIENT_ID = 'Ov23liVU3bFAK2lWtKPk'; // Sheet Board OAuth App（Device Flow）の公開クライアントIDです。秘密情報ではありません。フォークでは独自のIDに置き換えられます。空にするとトークン貼り付け方式になります。
 const GIST_FILENAME = 'sheetboard.json';
 const SETTINGS_SHEET = 'SheetBoard設定';
-const MAX_RANGES = 20;
-const MAX_ROWS = 100;
-const MAX_COLS = 20;
-const MAX_CELL_CHARS = 200;
-const MAX_JSON_BYTES = 500 * 1024;
 const HEARTBEAT_MINUTES = 60;
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const MAX_STATUS_ITEM_CHARS = 120;
-const MAX_STATUS_JSON_CHARS = 8000;
-const MAX_CHIP_SOURCE_CELLS = 500;
+const PROPERTY_VALUE_MAX_BYTES = 8000;
+const EXECUTION_BUDGET_MS = 270000;
+const GIST_RAW_MAX_BYTES = 10 * 1024 * 1024;
+const IOS_TRUNCATION_WARN_BYTES = 800 * 1024;
+const LARGE_RANGE_CELLS = 5000;
+
+function nowMillis_() { return Date.now(); }
+
+function utf8ByteLength_(value) {
+  return Utilities.newBlob(String(value)).getBytes().length;
+}
+
+function setBoundedProperty_(props, key, value) {
+  const text = String(value);
+  if (utf8ByteLength_(text) > PROPERTY_VALUE_MAX_BYTES) return false;
+  try {
+    props.setProperty(key, text);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function setPublishedNames_(props, names) {
+  const saved = [];
+  for (const name of names || []) {
+    const candidate = saved.concat([name]);
+    if (utf8ByteLength_(JSON.stringify(candidate)) > PROPERTY_VALUE_MAX_BYTES) break;
+    saved.push(name);
+  }
+  setBoundedProperty_(props, 'publishedNames', JSON.stringify(saved));
+  setBoundedProperty_(props, 'publishedNameCount', String((names || []).length));
+  setBoundedProperty_(props, 'publishedNamesIncomplete', String(saved.length < (names || []).length));
+}
+
+function publishedNameCount_(props) {
+  return Number(props.getProperty('publishedNameCount') || parseJsonArray_(props.getProperty('publishedNames')).length);
+}
+
+function checkExecutionBudget_(startedAt) {
+  if (startedAt !== null && startedAt !== undefined && nowMillis_() - startedAt > EXECUTION_BUDGET_MS) {
+    const error = new Error('表が大きすぎて、時間内に読み切れませんでした。範囲を分けるか、使わない列・行を範囲から外してください。（エラー番号 408）');
+    error.status = 408;
+    error.executionBudgetExceeded = true;
+    throw error;
+  }
+}
 function trimEmpty(values, layers) {
   layers = layers || {};
   values = values || [];
@@ -52,7 +92,7 @@ function parseJsonArray_(text) {
 
 function boundedStatusArray_(values) {
   const result = (values || []).map(value => String(value || '').slice(0, MAX_STATUS_ITEM_CHARS));
-  for (let i = result.length - 1; i >= 0 && JSON.stringify(result).length > MAX_STATUS_JSON_CHARS; i--) result[i] = '';
+  for (let i = result.length - 1; i >= 0 && utf8ByteLength_(JSON.stringify(result)) > PROPERTY_VALUE_MAX_BYTES; i--) result[i] = '';
   return result;
 }
 
@@ -80,13 +120,13 @@ function hiddenFilter(matrix, keepRows, keepCols) {
   return (matrix || []).filter((_, r) => keepRows[r]).map(row => (row || []).filter((_, c) => keepCols[c]));
 }
 
-function remapMerges(merges, keepRows, keepCols, rowLimit, colLimit) {
+function remapMerges(merges, keepRows, keepCols) {
   const rows = keepRows.map((keep, i) => keep ? keepRows.slice(0, i).filter(Boolean).length : -1);
   const cols = keepCols.map((keep, i) => keep ? keepCols.slice(0, i).filter(Boolean).length : -1);
   const result = [];
   (merges || []).forEach(merge => {
-    const rs = rows.slice(Math.max(0, merge[0]), Math.max(0, merge[0] + merge[2])).filter(i => i >= 0 && i < rowLimit);
-    const cs = cols.slice(Math.max(0, merge[1]), Math.max(0, merge[1] + merge[3])).filter(i => i >= 0 && i < colLimit);
+    const rs = rows.slice(Math.max(0, merge[0]), Math.max(0, merge[0] + merge[2])).filter(i => i >= 0);
+    const cs = cols.slice(Math.max(0, merge[1]), Math.max(0, merge[1] + merge[3])).filter(i => i >= 0);
     if (rs.length && cs.length && (rs.length > 1 || cs.length > 1)) result.push([rs[0], cs[0], rs.length, cs.length]);
   });
   return result;
@@ -171,9 +211,9 @@ function overallStatus_() {
   } else if (status === 'failure') {
     const error = String(props.getProperty('lastError') || '').replace(/^\d{4}-\d\d-\d\dT[^ ]+\s*/, '');
     result = {level: 'error', icon: '⚠', text: '公開できませんでした: ' + error, action: errorAction_(error)};
-  } else if (Number(props.getProperty('lastPublishMillis') || 0) && Date.now() - Number(props.getProperty('lastPublishMillis')) > 90 * 60000) {
+  } else if (Number(props.getProperty('lastPublishMillis') || 0) && nowMillis_() - Number(props.getProperty('lastPublishMillis')) > 90 * 60000) {
     result = {level: 'warn', icon: '⚠', text: '自動公開が止まっているようです', action: '管理者がメニュー「SheetBoard → はじめにセットアップ」をもう一度実行してください'};
-  } else if (!names.length) {
+  } else if (!publishedNameCount_(props)) {
     result = {level: 'warn', icon: '⚠', text: '掲示板に出す範囲がありません', action: '設定タブのA列（名前）の先頭の # を消してください。範囲を追加するには、表を選択してメニュー「SheetBoard → 選択範囲を掲示板に追加」'};
   } else if (props.getProperty('pending')) {
     result = {level: 'warn', icon: '⏳', text: '編集の反映を待っています（数分以内に自動で公開されます）', action: ''};
@@ -236,19 +276,13 @@ function buildRangePayload(values, colors, options) {
   const warnings = [];
   if (options.cols !== undefined && String(options.cols).trim() && !parseRatioList(options.cols).length) warnings.push('列幅の比の書き方が違うため無視しました（例: 1,3,1）');
   if (options.align !== undefined && String(options.align).trim() && !parseAlignList(options.align).length) warnings.push('配置の書き方が違うため無視しました（例: l,c,r）');
-  let truncated = false;
-  const rows = trimmed.values.slice(0, MAX_ROWS).map(row => row.slice(0, MAX_COLS).map(value => {
-    const s = value === null || value === undefined ? '' : String(value);
-    if (s.length > MAX_CELL_CHARS) truncated = true;
-    return s.slice(0, MAX_CELL_CHARS);
-  }));
-  if (truncated) warnings.push('200文字を超えるセルを短くしました。');
+  const rows = trimmed.values.map(row => row.map(value => value === null || value === undefined ? '' : String(value)));
   const payload = {header: !!options.header, rows: rows};
   if (options.title !== undefined && options.title !== null && String(options.title).trim()) payload.title = String(options.title);
   const cols = Array.isArray(options.cols) ? options.cols : parseRatioList(options.cols);
   const align = Array.isArray(options.align) ? options.align : parseAlignList(options.align);
-  if (cols.length) payload.cols = cols.slice(0, MAX_COLS);
-  if (align.length) payload.align = align.slice(0, MAX_COLS);
+  if (cols.length) payload.cols = cols;
+  if (align.length) payload.align = align;
   if (options.format) {
     const layer = rows.map((row, r) => row.map((_, c) => normalizeColor(trimmed.layers.colors[r][c])));
     if (layer.some(row => row.some(value => value !== ''))) payload.color = layer;
@@ -271,7 +305,7 @@ function buildRangePayload(values, colors, options) {
   if (Object.prototype.hasOwnProperty.call(extra, 'colw')) payload.colw = extra.colw.slice(0, width);
   if (Object.prototype.hasOwnProperty.call(extra, 'rowh')) payload.rowh = extra.rowh.slice(0, rows.length);
   if (Object.prototype.hasOwnProperty.call(extra, 'merges')) {
-    payload.merges = remapMerges(extra.merges, Array(trimmed.values.length).fill(true), Array(trimmed.values[0] ? trimmed.values[0].length : 0).fill(true), rows.length, width);
+    payload.merges = remapMerges(extra.merges, Array(trimmed.values.length).fill(true), Array(trimmed.values[0] ? trimmed.values[0].length : 0).fill(true));
   }
   return {payload: payload, warnings: warnings};
 }
@@ -713,7 +747,7 @@ function finishSetup() {
   PropertiesService.getDocumentProperties().deleteProperty('urlChangeNotice');
   writeSheetStatus_();
   try { SpreadsheetApp.getActiveSpreadsheet().setActiveSheet(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SETTINGS_SHEET)); } catch (e) {}
-  return {url: worldUrl_(), rangeCount: JSON.parse(PropertiesService.getDocumentProperties().getProperty('publishedNames') || '[]').length};
+  return {url: worldUrl_(), rangeCount: publishedNameCount_(PropertiesService.getDocumentProperties())};
 }
 function publishFailureMessage_() {
   const outcome = PropertiesService.getDocumentProperties().getProperty('lastPublishOutcome');
@@ -846,9 +880,10 @@ function publishNow() {
     if (publish_(true)) {
       const props = PropertiesService.getDocumentProperties();
       const names = JSON.parse(props.getProperty('publishedNames') || '[]');
+      const nameCount = publishedNameCount_(props);
       const status = overallStatus_();
       const warnings = JSON.parse(props.getProperty('warnings') || '[]');
-      const message = names.length
+      const message = nameCount
         ? '✔ 公開しました。ワールドの掲示板には1〜2分で反映されます。' +
           (warnings.length ? '\n\n次の行には注意があります:\n・' + warnings.join('\n・') : '')
         : status.text + '\n' + status.action;
@@ -862,7 +897,7 @@ function publishNow() {
     showMessage_('公開できませんでした', errorText_(e));
   }
 }
-function readRanges_() {
+function readRanges_(startedAt) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const settings = ss.getSheetByName(SETTINGS_SHEET);
   if (!settings) throw new Error('設定タブがありません。はじめにセットアップを実行してください。');
@@ -870,9 +905,11 @@ function readRanges_() {
   const ranges = Object.create(null);
   const seen = Object.create(null);
   const chipSourceCache = Object.create(null);
+  const filterCache = Object.create(null);
   const warnings = [];
   const rowStatus = [];
   config.forEach((row, index) => {
+    checkExecutionBudget_(startedAt);
     const rowWarnings = [];
     const name = String(row[0] === null ? '' : row[0]).trim();
     if (!name) {
@@ -889,11 +926,6 @@ function readRanges_() {
       return;
     }
     seen[name] = true;
-    if (Object.keys(ranges).length >= MAX_RANGES) {
-      warnings.push('範囲は20個までです。「' + name + '」を省きました。');
-      rowStatus[index] = '⚠ 範囲は20個までのため省きました';
-      return;
-    }
     try {
       const ref = parseRangeRef(row[1]);
       if (!ref || !ref.a1) throw new Error('範囲に文字が入っていません');
@@ -904,14 +936,8 @@ function readRanges_() {
       catch (e) { throw new Error('範囲「' + ref.a1 + '」を読めません。'); }
       const startRow = range.getRow();
       const startCol = range.getColumn();
-      const rows = Math.min(range.getNumRows(), MAX_ROWS, Math.max(0, sheet.getLastRow() - startRow + 1));
-      const cols = Math.min(range.getNumColumns(), MAX_COLS, Math.max(0, sheet.getLastColumn() - startCol + 1));
-      if (Math.min(range.getNumRows(), Math.max(0, sheet.getLastRow() - startRow + 1)) > MAX_ROWS) {
-        warnings.push('「' + name + '」: 行数が100行を超えたため、残りを省きました。');
-      }
-      if (Math.min(range.getNumColumns(), Math.max(0, sheet.getLastColumn() - startCol + 1)) > MAX_COLS) {
-        warnings.push('「' + name + '」: 列数が20列を超えたため、残りを省きました。');
-      }
+      const rows = Math.min(range.getNumRows(), Math.max(0, sheet.getLastRow() - startRow + 1));
+      const cols = Math.min(range.getNumColumns(), Math.max(0, sheet.getLastColumn() - startCol + 1));
       if (!rows || !cols) {
         const emptyResult = buildRangePayload([], [], {
           title: row[2],
@@ -930,9 +956,19 @@ function readRanges_() {
         return;
       }
       range = sheet.getRange(startRow, startCol, rows, cols);
-      const keepRows = Array.from({length: range.getNumRows()}, (_, i) =>
-        !sheet.isRowHiddenByUser(startRow + i) && !sheet.isRowHiddenByFilter(startRow + i));
-      const keepCols = Array.from({length: range.getNumColumns()}, (_, i) => !sheet.isColumnHiddenByUser(startCol + i));
+      const sheetName = sheet.getName();
+      if (!Object.prototype.hasOwnProperty.call(filterCache, sheetName)) {
+        filterCache[sheetName] = typeof sheet.getFilter === 'function' ? !!sheet.getFilter() : false;
+      }
+      const hasFilter = filterCache[sheetName];
+      const keepRows = Array.from({length: range.getNumRows()}, (_, i) => {
+        checkExecutionBudget_(startedAt);
+        return !sheet.isRowHiddenByUser(startRow + i) && (!hasFilter || !sheet.isRowHiddenByFilter(startRow + i));
+      });
+      const keepCols = Array.from({length: range.getNumColumns()}, (_, i) => {
+        checkExecutionBudget_(startedAt);
+        return !sheet.isColumnHiddenByUser(startCol + i);
+      });
       const validations = range.getDataValidations();
       let values = range.getDisplayValues().map((line, rowIndex) => line.map((value, columnIndex) => {
         const validation = validations[rowIndex][columnIndex];
@@ -962,10 +998,17 @@ function readRanges_() {
               const sourceRange = criteriaValues[0];
               sourceKey = sourceRange.getSheet().getName() + '!' + sourceRange.getA1Notation();
               if (!Object.prototype.hasOwnProperty.call(chipSourceCache, sourceKey)) {
-                if (sourceRange.getNumRows() * sourceRange.getNumColumns() > MAX_CHIP_SOURCE_CELLS) {
-                  chipSourceCache[sourceKey] = null;
+                const sourceSheet = sourceRange.getSheet();
+                const sourceRow = sourceRange.getRow();
+                const sourceCol = sourceRange.getColumn();
+                const sourceRows = Math.min(sourceRange.getNumRows(), Math.max(0, sourceSheet.getLastRow() - sourceRow + 1));
+                const sourceCols = Math.min(sourceRange.getNumColumns(), Math.max(0, sourceSheet.getLastColumn() - sourceCol + 1));
+                if (!sourceRows || !sourceCols) {
+                  chipSourceCache[sourceKey] = {displayValues: [], backgrounds: [], fontColors: []};
                 } else {
-                  const fontColors = sourceRange.getFontColorObjects().map(sourceLine => sourceLine.map(color => {
+                  checkExecutionBudget_(startedAt);
+                  const boundedSource = sourceSheet.getRange(sourceRow, sourceCol, sourceRows, sourceCols);
+                  const fontColors = boundedSource.getFontColorObjects().map(sourceLine => sourceLine.map(color => {
                     try {
                       return color.asRgbColor().asHexString();
                     } catch (e) {
@@ -973,8 +1016,8 @@ function readRanges_() {
                     }
                   }));
                   chipSourceCache[sourceKey] = {
-                    displayValues: sourceRange.getDisplayValues(),
-                    backgrounds: sourceRange.getBackgrounds(),
+                    displayValues: boundedSource.getDisplayValues(),
+                    backgrounds: boundedSource.getBackgrounds(),
                     fontColors: fontColors
                   };
                 }
@@ -982,6 +1025,7 @@ function readRanges_() {
               const source = chipSourceCache[sourceKey];
               if (source) swatch = chipSwatch(source.displayValues, source.backgrounds, source.fontColors, value);
             } catch (e) {
+              if (e && e.executionBudgetExceeded) throw e;
               if (sourceKey) chipSourceCache[sourceKey] = null;
             }
           }
@@ -1004,11 +1048,19 @@ function readRanges_() {
         }
         extra.wrap = range.getWrapStrategies().map(line => line.map(strategy => strategy === SpreadsheetApp.WrapStrategy.WRAP ? 1 : 0));
         if (row[5] === null || row[5] === undefined || String(row[5]).trim() === '') {
-          extra.colw = keepCols.map((keep, i) => keep ? sheet.getColumnWidth(startCol + i) : null).filter(value => value !== null);
+          extra.colw = keepCols.map((keep, i) => {
+            if (!keep) return null;
+            checkExecutionBudget_(startedAt);
+            return sheet.getColumnWidth(startCol + i);
+          }).filter(value => value !== null);
         }
-        extra.rowh = keepRows.map((keep, i) => keep ? sheet.getRowHeight(startRow + i) : null).filter(value => value !== null);
+        extra.rowh = keepRows.map((keep, i) => {
+          if (!keep) return null;
+          checkExecutionBudget_(startedAt);
+          return sheet.getRowHeight(startRow + i);
+        }).filter(value => value !== null);
         const merges = range.getMergedRanges().map(merge => [merge.getRow() - startRow, merge.getColumn() - startCol, merge.getNumRows(), merge.getNumColumns()]);
-        extra.merges = remapMerges(merges, keepRows, keepCols, MAX_ROWS, MAX_COLS);
+        extra.merges = remapMerges(merges, keepRows, keepCols);
         ['styles', 'sizes', 'bg', 'ha', 'wrap', 'chips'].forEach(key => {
           if (Object.prototype.hasOwnProperty.call(extra, key)) {
             extra[key] = hiddenFilter(extra[key], keepRows, keepCols);
@@ -1025,6 +1077,11 @@ function readRanges_() {
         align: row[6],
         extra: extra
       });
+      if (keepRows.filter(Boolean).length * keepCols.filter(Boolean).length > LARGE_RANGE_CELLS) {
+        const notice = '⚠ 範囲が大きいため、公開に時間がかかり、掲示板の文字がとても小さくなります';
+        warnings.push('「' + name + '」: ' + notice);
+        rowWarnings.push(notice);
+      }
       ranges[name] = result.payload;
       result.warnings.forEach(warning => {
         warnings.push('「' + name + '」: ' + warning);
@@ -1032,6 +1089,7 @@ function readRanges_() {
       });
       rowStatus[index] = '✔ 掲示板に表示されます' + (rowWarnings.length ? ' ／ ' + rowWarnings.join(' ／ ') : '');
     } catch (e) {
+      if (e && e.executionBudgetExceeded) throw e;
       const message = e && e.message ? e.message : String(e);
       warnings.push('「' + name + '」: ' + message);
       rowStatus[index] = '⚠ ' + message;
@@ -1053,6 +1111,7 @@ function sheetTimeZone_() {
 }
 
 function publish_(force, trigger, recreate) {
+  const startedAt = nowMillis_();
   const lock = LockService.getDocumentLock();
   if (!lock.tryLock(trigger ? 0 : 10000)) {
     const props = PropertiesService.getDocumentProperties();
@@ -1098,25 +1157,31 @@ function publish_(force, trigger, recreate) {
     throw error;
   }
   try {
-    const data = readRanges_();
+    const data = readRanges_(startedAt);
     const rowStatus = JSON.stringify(boundedStatusArray_(data.rowStatus));
-    if (props.getProperty('rowStatus') !== rowStatus) props.setProperty('rowStatus', rowStatus);
+    if (props.getProperty('rowStatus') !== rowStatus) setBoundedProperty_(props, 'rowStatus', rowStatus);
+    const previousContentBytes = Number(props.getProperty('lastContentBytes') || 0);
+    const iosWarning = '掲示板の内容が大きいため、iPhone 版 VRChat では表示できないことがあります。範囲を分けると確実です。';
+    if (previousContentBytes > IOS_TRUNCATION_WARN_BYTES &&
+        !data.warnings.includes(iosWarning)) {
+      data.warnings.unshift(iosWarning);
+    }
     const warnings = JSON.stringify(boundedStatusArray_(data.warnings));
-    if (props.getProperty('warnings') !== warnings) props.setProperty('warnings', warnings);
+    if (props.getProperty('warnings') !== warnings) setBoundedProperty_(props, 'warnings', warnings);
     const ranges = data.ranges;
     const rev = computeRev_(ranges);
     const previousRev = props.getProperty('lastRev');
     let id = props.getProperty('gistId');
     const pending = props.getProperty('pending');
     if (!force && !pending && rev === previousRev && id &&
-        Date.now() - Number(props.getProperty('lastPublishMillis') || 0) < HEARTBEAT_MINUTES * 60000) {
+        nowMillis_() - Number(props.getProperty('lastPublishMillis') || 0) < HEARTBEAT_MINUTES * 60000) {
       const current = props.getProperties();
       const updates = {};
       if (current.lastPublishStatus !== 'success') updates.lastPublishStatus = 'success';
       if (current.lastError !== '') updates.lastError = '';
       if (current.lastPublishOutcome !== 'success') updates.lastPublishOutcome = 'success';
       if (Object.keys(updates).length) props.setProperties(updates);
-      props.setProperty('publishedNames', JSON.stringify(Object.keys(ranges)));
+      setPublishedNames_(props, Object.keys(ranges));
       writeSheetStatus_();
       return true;
     }
@@ -1135,7 +1200,16 @@ function publish_(force, trigger, recreate) {
       order: Object.keys(ranges),
       ranges: ranges
     });
-    if (Utilities.newBlob(content).getBytes().length > MAX_JSON_BYTES) throw new Error('掲示板に出す内容が多すぎます。設定タブの範囲を小さくするか、いくつかの行に分けてください。');
+    const contentBytes = utf8ByteLength_(content);
+    if (contentBytes > GIST_RAW_MAX_BYTES) throw new Error('掲示板に出す内容が 10MB を超えたため公開できません（GitHub の Gist が全文を返せる上限です）。範囲を小さくするか分けてください。');
+    if (contentBytes > IOS_TRUNCATION_WARN_BYTES) {
+      if (!data.warnings.includes(iosWarning)) data.warnings.unshift(iosWarning);
+    } else {
+      data.warnings = data.warnings.filter(warning => warning !== iosWarning);
+    }
+    const finalWarnings = JSON.stringify(boundedStatusArray_(data.warnings));
+    if (props.getProperty('warnings') !== finalWarnings) setBoundedProperty_(props, 'warnings', finalWarnings);
+    checkExecutionBudget_(startedAt);
 
     let recreated = !!(id && recreate);
     if (!id || recreate) id = createGist_(content, token);
@@ -1144,6 +1218,7 @@ function publish_(force, trigger, recreate) {
       if (!props.getProperty('worldUrl')) props.setProperty('worldUrl', makeWorldUrl_(owner, id));
       const files = {}; files[GIST_FILENAME] = {content: content};
       try {
+        checkExecutionBudget_(startedAt);
         githubRequest_('patch', '/gists/' + encodeURIComponent(id), {files: files}, token);
       } catch (e) {
         if (e.status !== 404) throw e;
@@ -1159,6 +1234,7 @@ function publish_(force, trigger, recreate) {
       lastPublishStatus: 'success',
       lastError: ''
     };
+    if (props.getProperty('lastContentBytes') !== String(contentBytes)) state.lastContentBytes = String(contentBytes);
     props.setProperties(state);
     Object.keys(props.getProperties())
       .filter(key => key.startsWith('lastMail_') && key.indexOf('urlChange') < 0)
@@ -1173,15 +1249,15 @@ function publish_(force, trigger, recreate) {
         props.setProperty('lastError', new Date().toISOString() + ' URL変更のお知らせメールを送れませんでした。');
       }
     }
-    props.setProperty('lastTriggerMillis', String(Date.now()));
+    props.setProperty('lastTriggerMillis', String(nowMillis_()));
     props.setProperty('lastPublishOutcome', 'success');
-    props.setProperty('publishedNames', JSON.stringify(Object.keys(ranges)));
+    setPublishedNames_(props, Object.keys(ranges));
     writeSheetStatus_();
     return true;
   } catch (e) {
     const message = errorText_(e);
     if (e.authAction === 'temporary') props.setProperty('pending', Utilities.getUuid());
-    props.setProperty('lastError', new Date().toISOString() + ' ' + message);
+    props.setProperty('lastError', new Date(nowMillis_()).toISOString() + ' ' + message);
     props.setProperty('lastPublishStatus', 'failure');
     props.setProperty('lastPublishOutcome', e.authAction === 'reconnect' || e.status === 401 ? 'reauth_required' : 'failure');
     writeSheetStatus_();
@@ -1234,6 +1310,9 @@ function showStatus() {
   try {
     names = JSON.parse(props.getProperty('publishedNames') || '[]');
   } catch (e) {}
+  const nameSummary = names.length
+    ? names.join('、') + (props.getProperty('publishedNamesIncomplete') === 'true' ? '、…（ほか ' + Math.max(0, publishedNameCount_(props) - names.length) + ' 件）' : '')
+    : '範囲名は保存上限を超えています（' + publishedNameCount_(props) + ' 件）';
   let error = props.getProperty('lastError') || '';
   if (error) {
     const match = error.match(/^(\d{4}-\d\d-\d\dT[^ ]+)\s*(.*)$/);
@@ -1250,7 +1329,7 @@ function showStatus() {
     '<tr><td>あなた</td><td>' + escapeHtml_(who) + '</td></tr>' +
     '<tr><td>最終公開</td><td>' + escapeHtml_(formatTime(props.getProperty('lastPublishTime'))) + '</td></tr>' +
     '<tr><td>掲示板の内容の更新</td><td>' + escapeHtml_(updated ? Utilities.formatDate(new Date(updated * 1000), sheetTimeZone_(), 'yyyy/MM/dd HH:mm') : 'まだ公開していません') + '</td></tr>' +
-    '<tr><td>公開中の範囲</td><td>' + escapeHtml_(names.length ? names.join('、') : 'なし') + '</td></tr></table>';
+    '<tr><td>公開中の範囲</td><td>' + escapeHtml_(publishedNameCount_(props) ? nameSummary : 'なし') + '</td></tr></table>';
   const warningsHtml = allWarnings.length
     ? allWarnings.map(item => '<li>' + escapeHtml_(item) + '</li>').join('')
     : '<li>ありません</li>';

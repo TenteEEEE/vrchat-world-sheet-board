@@ -12,7 +12,7 @@ Google スプレッドシートの決めた範囲を、**ワールドを再ア�
 - 来訪者は VRChat の設定（Allow Untrusted URLs）を変えなくてよい。
 - シートの見た目（色・書式・結合・列幅・行の高さ・配置）をなるべくそのまま再現する。
 
-対象環境: Unity 2022.3、VRChat Worlds SDK 3.8 以降、UdonSharp 1.x、TextMeshPro 3.0.6、Google Apps Script（V8）。
+対象環境: Unity 2022.3、VRChat Worlds SDK ^3.10.0、UdonSharp 1.x、TextMeshPro 3.0.6、Google Apps Script（V8）。
 
 ## 2. 全体構成
 
@@ -62,15 +62,16 @@ public float manualCooldown = 5f;      // 手動更新のクールダウン（�
 public float startDelayMax = 3f;       // 初回取得をランダムに遅らせる上限（秒）
 // 状態行の文言（§3.6）
 public SheetBoardAudience audience = SheetBoardAudience.Public; // 全員 / 協力者以上 / 管理者のみ
+public SheetBoardLanguage language = SheetBoardLanguage.Auto; // Auto / Japanese / English
 public UdonBehaviour permissionController; // 制限付き閲覧で使う PermissionController
-public string permissionDeniedText = "閲覧権限がありません";
-public string permissionWaitingText = "権限を確認中…";
+// 以下の文言フィールドは空欄が既定。§3.6 の表示言語別文言で補う
+public string permissionDeniedText, permissionWaitingText;
 public string urlMissingText, loadingText, waitingNearText, failedText, freshText, staleText, retryText;
-public string refreshingSuffix = "・更新中…"; // 成功済みの状態行の末尾に付ける
-public string minutesUnit = "分前", hoursUnit = "時間前", daysUnit = "日前";
+public string refreshingSuffix; // 成功済みの状態行の末尾に付ける
+public string minutesUnit, hoursUnit, daysUnit;
 ```
 
-Source Inspector では `permissionDeniedText`、`permissionWaitingText` を含むすべての状態表示文言を編集できる。置き換え記号は `{code}` = エラー、`{s}` = 秒、`{time}` = 更新時刻、`{ago}` = 経過時間。
+Source Inspector では表示言語を `Auto` / `Japanese` / `English` から選び、`permissionDeniedText`、`permissionWaitingText` を含む状態表示文言を上書きできる。Auto は閲覧者の `VRCPlayerApi.GetCurrentLanguage()` が `ja` で始まるとき日本語、それ以外は英語。文言フィールドが空、または従来の日本語既定値と完全一致する場合は、表示言語の既定文言を使う。独自の値はそのまま表示する。置き換え記号は `{code}` = エラー、`{s}` = 秒、`{time}` = 更新時刻、`{ago}` = 経過時間。
 
 ### 3.2 取得スケジュール
 
@@ -130,15 +131,24 @@ public bool ApplyJson(string json);
 
 ### 3.6 状態行
 
-| 状況 | level | 既定の文言 |
-| --- | --- | --- |
-| URL 未設定 | 2 | `URLが設定されていません` |
-| 初回取得前・初回取得中 | 2 | `読み込み中…` |
-| 近接待ちで一度も取得していない | 2 | `近づくと読み込みます` |
-| 一度も成功せずに失敗（再試行待ち） | 2 | `読み込めません・{s}秒後に再試行（{code}）` |
-| 成功・正常 | 0 | `更新 {time}（{ago}）` |
-| 成功・生存通知が `staleMinutes` 超過 | 1 | `更新 {time}（{ago}）・自動公開が止まっています` |
-| 成功済みで直近が失敗 | 1 | `更新 {time}（{ago}）・再試行中` |
+| 状況 | level | 日本語の既定文言 | 英語の既定文言 |
+| --- | --- | --- | --- |
+| 閲覧権限なし | — | `閲覧権限がありません` | `You don't have permission to view this.` |
+| 権限確認中 | — | `権限を確認中…` | `Checking permission…` |
+| URL 未設定 | 2 | `URLが設定されていません` | `No URL is set.` |
+| 初回取得前・初回取得中 | 2 | `読み込み中…` | `Loading…` |
+| 近接待ちで一度も取得していない | 2 | `近づくと読み込みます` | `Come closer to load.` |
+| 一度も成功せずに失敗（再試行待ち） | 2 | `読み込めません・{s}秒後に再試行（{code}）` | `Couldn't load · retrying in {s}s ({code})` |
+| 成功・正常 | 0 | `更新 {time}（{ago}）` | `Updated {time} ({ago})` |
+| 成功・生存通知が `staleMinutes` 超過 | 1 | `更新 {time}（{ago}）・自動公開が止まっています` | `Updated {time} ({ago}) · auto-publish has stopped` |
+| 成功済みで直近が失敗 | 1 | `更新 {time}（{ago}）・再試行中` | `Updated {time} ({ago}) · retrying` |
+| 成功済みの状態行に付く更新中表示 | — | `・更新中…` | ` · updating…` |
+| 経過時間（分） | — | `分前` | ` min ago` |
+| 経過時間（時間） | — | `時間前` | ` h ago` |
+| 経過時間（日） | — | `日前` | ` d ago` |
+| 範囲なし（Display） | — | `範囲「{name}」が見つかりません` | `Range "{name}" was not found.` |
+| Source 未設定（Display） | — | `Sourceが設定されていません` | `No Source is set.` |
+| 更新ボタン（Display） | — | `更新` | `Refresh` |
 
 - 「止まっています」の判定は `aliveUnix > 0 かつ 現在 − aliveUnix > staleMinutes`。`aliveUnix` が 0（旧形式）のときは判定しない。
 - `{time}` は `updatedUnix`（内容が最後に変わった時刻）を**閲覧者の現地時刻**にした `HH:mm`。`Hour.ToString("00") + ":" + Minute.ToString("00")` で組む（書式文字列の `:` はカルチャ依存のため）。
@@ -155,10 +165,9 @@ public bool ApplyJson(string json);
 
 ```csharp
 public SheetBoardSource source;
+public SheetBoardLanguage language = SheetBoardLanguage.Auto; // Auto / Japanese / English
 public string rangeName = "";          // 空なら最初の範囲（§4.6）
 public bool lightTheme = true;
-public int maxRows = 40;               // 見出し行を含む
-public int maxCols = 12;
 public bool showTitle = true;
 public bool showGrid = true;
 public float gridWidth = 1f;           // px
@@ -167,15 +176,14 @@ public float textScale = 1.4f;         // 0.5〜3
 public bool autoFitColumns = true;     // 列幅と文字サイズを自動調整
 public float maxRowHeight = 64f;       // px
 public float columnGap = 12f;          // px。showGrid が OFF かつ colw を使わないとき有効
-public int maxOverlays = 24;           // プールごと
 public bool chipAutoPalette = true;    // チップを名前ごとに自動配色
 public Color[] chipPalette;             // 自動配色パレット（10 色）
 public float nearCheckInterval = 1f;   // 秒。0.25〜1.5 にクランプ
 // 色（α 0 なら lightTheme に応じた既定値で埋める）
 public Color boardColor, bodyColor, gridColor, headerBackgroundColor, zebraColor, chipColor, chipArrowColor, normalColor, staleColor, errorColor, busyColor, refreshButtonColor, refreshLabelColor, refreshDisabledColor, refreshDisabledLabelColor;
-public string rangeMissingText = "範囲「{name}」が見つかりません";
-public string sourceMissingText = "Sourceが設定されていません";
-public string refreshIdleText = "更新";
+public string rangeMissingText = "";
+public string sourceMissingText = "";
+public string refreshIdleText = ""; // 空欄なら表示言語の既定文言
 // installer が配線する内部参照（[Header] で区切る）
 public Image background;
 public TMP_Text titleText, statusText;
@@ -187,7 +195,7 @@ public TMP_Text refreshLabel;
 ```
 
 TMP 参照は `TMP_Text` 型にする（`TextMeshProUGUI.fontSize` の setter は Udon 非公開）。
-Display Inspector では `rangeMissingText` と `sourceMissingText` を含むすべての文言フィールドを編集できる。
+Source の 13 個と Display の 3 個、合計 16 個の文言フィールドは上書き用。Display Inspector では `language` と `rangeMissingText`、`sourceMissingText`、`refreshIdleText` を編集できる。16 個の各フィールドは、空欄または従来の日本語既定値と完全一致する場合に表示言語の既定文言を使い、それ以外は入力値を使う。
 
 | 色 | ライト（既定） | ダーク |
 | --- | --- | --- |
@@ -211,14 +219,15 @@ Display Inspector では `rangeMissingText` と `sourceMissingText` を含むす
 
 ### 4.2 描画の構造
 
-兄弟順・描画順（奥から）: 格子の下地 → セル矩形 → ChipLayer → ArrowLayer → 列 TMP・オーバーレイ。チップと ▼ はそれぞれテンプレートから複製するプールで、両方の配列長は `maxRows × maxCols`。GameObject は必要になった分だけ初回に遅延生成し、以後 SetActive で再利用する。
+兄弟順・描画順（奥から）: 格子の下地 → セル矩形 → ChipLayer → ArrowLayer → 列 TMP・オーバーレイ。チップと ▼ はそれぞれテンプレートから複製するプール。各プールは必要になった分だけ遅延生成し、不足時に伸ばす。表はデータの全行・全列を描画する。表が大きいほど文字は小さくなり、処理は重くなる。
 
-- **列 TMP**: 列ごとに 1 つ。`columnTemplate` の親（RectMask2D の列枠）ごと複製する。セルは改行区切りで 1 列の TMP に並べる。テンプレートは折り返し OFF・overflow Overflow・richText ON・margin 0。
-- **セル矩形**: `cellTemplate` から必要になった分だけ作る（上限 `maxRows × maxCols`）。格子の下地も `cellTemplate` から 1 枚作る。
+- **列 TMP**: 列ごとに行ブロック単位のセグメントを使う。`columnTemplate` の親（RectMask2D の列枠）ごと複製する。セルは改行区切りで並べ、1 セグメントの予算は 6,000 文字。各セグメントの先頭に透明な M のダミー行を置いて縦中央を補正する。テンプレートは折り返し OFF・overflow Overflow・richText ON・margin 0。
+- TMP 3.0.6 は 1 つのテキストが 16,383 文字を超えても末尾を捨てず、`new Material` で複製したマテリアルを使う子メッシュに溢れた文字を描く（`TMPro_UGUI_Private.cs` の「Limit the mesh of the main text object to 65535 vertices and use sub objects for the overflow」）。そのマテリアルは再描画ごとに作られ、バッチも分かれる。セグメント化はこのオーバーフロー経路を避けるために行う。
+- **セル矩形**: `cellTemplate` から必要になった分だけ遅延生成し、不足時に伸ばす。格子の下地も `cellTemplate` から 1 枚作る。
 - **チップ・▼**: `chipTemplate` と `arrowTemplate` から作り、同じ添字のチップと矢印を組にして再利用する。ChipLayer はセル矩形より手前、ArrowLayer は ChipLayer より手前、列 TMP とオーバーレイは両レイヤーより手前に置く。
-- **オーバーレイ**: 折り返しあり（`overlayTemplate`）と折り返しなし（`overlayNoWrapTemplate`）の 2 プール。どちらも上限 `maxOverlays`。
+- **オーバーレイ**: 折り返しあり（`overlayTemplate`）と折り返しなし（`overlayNoWrapTemplate`）の 2 プール。どちらも必要に応じて遅延生成し、不足時に伸ばす。文字が空のセルにはオーバーレイを使わない。
 - 生成スプライトはチップが 64 × 64 px（border は四辺 31 px）、▼ が 64 × 40 px（border 0 px）。
-- プールは初回の描画で作り、以後は SetActive で再利用する。実際に描く行数・列数は「プールに収まる数」で上限をかける（実行時に `maxRows` などを上げてもはみ出さない）。
+- すべてのプールは遅延生成し、以後は SetActive で再利用する。行数・列数・オーバーレイ数による描画上限は設けない。
 - Udon で使えない API: `TMP_Text.transform / gameObject / rectTransform` → `GetComponent<RectTransform>()` を使う。`richText / enableWordWrapping / overflowMode / margin` の setter → テンプレート側で設定する。使える setter は `text / color / fontSize / alignment`。
 
 ### 4.3 前処理（1 回の走査）
@@ -232,7 +241,7 @@ Display Inspector では `rangeMissingText` と `sourceMissingText` を含むす
 ### 4.4 レイアウト
 
 - 列幅: 手動の cols があればその比。手動指定がなく autoFitColumns が ON（既定）の場合、文字が収まる最低幅を確保し、余りをシート列幅 colw の比、または colw がなければ必要幅の比で配る。autoFitColumns が OFF なら従来どおり colw、または最長セル幅（ASCII 1・その他 2、2〜40 にクランプ）の比を使う。配列の不足・0 以下の値は有効値の中央値で補う。
-- 列幅の見積もり: 1em あたり (ASCII 数 × 0.55 + 非 ASCII 数) × サイズ倍率 × 太字係数 × 1.05。サイズ倍率は <size%> と同じ 0.6〜1.6、太字係数は 1.06（太字または見出し行）。200 文字までを数え、空き列は 0.6em とする。結合セル・折り返しセル・改行を含むセル・右側が行末まで空（値なし・背景色なし・結合なし）の左寄せセルは列の必要幅に含めない。途中に値などがある行の左寄せセルは必要幅に含める。
+- 列幅の見積もり: 1em あたり (ASCII 数 × 0.55 + 非 ASCII 数) × サイズ倍率 × 太字係数 × 1.05。サイズ倍率は <size%> と同じ 0.6〜1.6、太字係数は 1.06（太字または見出し行）。表示可能なセル文字を数え、空き列は 0.6em とする。結合セル・折り返しセル・改行を含むセル・右側が行末まで空（値なし・背景色なし・結合なし）の左寄せセルは列の必要幅に含めない。途中に値などがある行の左寄せセルは必要幅に含める。
 - チップのセルは列の必要幅に `ChipExtraEm`（1.3em）を加える。チップのセルは、はみ出しオーバーレイの候補にしない。
 - 列間: autoFitColumns の自動列幅では showGrid が ON なら 0、OFF なら columnGap。それ以外は従来どおり showGrid または colw 使用時は 0、それ以外は columnGap。
 - 行の高さ: rowh があればその比（足りない・0 以下は有効値の中央値、無ければ 21）、無ければ全行同じ。倍率 k = min(表領域の高さ / Σrowh, maxRowHeight / median(rowh))。
@@ -246,8 +255,8 @@ Display Inspector では `rangeMissingText` と `sourceMissingText` を含むす
 
 1. 値を文字列化（数値なら `ToString()`）。
 2. 列 TMP では改行を空白 1 つに置き換える（オーバーレイでは改行を残す）。
-3. 200 文字を超えたら切って `…`。
-4. **エスケープ**: `<` を `<` + U+200B に置き換える（ソースには `"​"` と書く）。タイトルも同じ処理（改行→空白、200 文字、エスケープ）を通す。
+3. 1 セルに表示する文字は 4,000 文字まで。超える場合は末尾を `…` に置き換えて表示する。
+4. **エスケープ**: `<` は `<noparse><</noparse>` に置き換える。タイトルにも同じ処理（改行→空白、4,000 文字、エスケープ）を適用する。
 5. 書式: style ビット（1 太字、2 斜体、4 下線、8 取り消し線）を `<b><i><u><s>` で囲む。見出し行（`header`）は太字。`size` があれば `size / 基準pt` を 0.6〜1.6 に収めた倍率を `<size=NN%>` で付ける（100% は付けない）。
 6. 文字色（コントラスト補正）を `<color=#RRGGBB>` で付ける:
    - 文字色が無く背景色があるとき: 背景の輝度 `0.2126R + 0.7152G + 0.0722B` が 0.5 以上なら `#202124`、未満なら `#FFFFFF`。
@@ -255,7 +264,7 @@ Display Inspector では `rangeMissingText` と `sourceMissingText` を含むす
    - 文字色があり背景色が無いとき: ダークで輝度 0.25 未満、またはライトで 0.85 超なら `bodyColor`。それ以外はその色。
    - 背景色があるときの明示色はそのまま。
 
-列 TMP の先頭にダミー行を置く。`<line-height=0>`、透明な `M`、基準サイズの V0 を使い、最初の行の位置を合わせる。各セル行の先頭には `<line-height=h_r>`（行の高さが全部同じなら先頭 1 回）、`<align=left|center|right>`、縦中央用の `<voffset=-offset>`…`</voffset>` を付ける。`offset = h_r/2 − 0.78 × b + 0.38 × (f − b)` で、`b` は基準文字サイズ、`f` はセルの実効文字サイズ。`|offset| < 1` なら `<voffset>` は付けない。結合で覆われたセルとオーバーレイで描くセルは空行にする（タグは付けて行位置を保つ）。
+各列 TMP セグメントの先頭にダミー行を置く。`<line-height=0>`、透明な `M`、基準サイズの V0 を使い、各セグメント先頭の行位置を合わせる。透明化は閉じタグのない `<alpha=#00>` で行い、後続文字の前に `<alpha=#FF>` を付けて戻す。TMP 3.0.6 に `</alpha>` はない。各セル行の先頭には `<line-height=h_r>`（行の高さが全部同じなら先頭 1 回）、`<align=left|center|right>`、縦中央用の `<voffset=-offset>`…`</voffset>` を付ける。`offset = h_r/2 − 0.78 × b + 0.38 × (f − b)` で、`b` は基準文字サイズ、`f` はセルの実効文字サイズ。`|offset| < 1` なら `<voffset>` は付けない。結合で覆われたセルとオーバーレイで描くセルは空行にする（タグは付けて行位置を保つ）。
 
 チップセルの文字色は、チップ文字色、コントラスト比 3.0 以上を満たすセル文字色、自動文字色の順で選ぶ。
 
@@ -275,7 +284,7 @@ Display Inspector では `rangeMissingText` と `sourceMissingText` を含むす
 
 ### 4.8 オーバーレイ
 
-次のセルはオーバーレイで描き、列 TMP の該当行は空にする。
+次のセルは、文字が空でない場合にオーバーレイで描き、列 TMP の該当行は空にする。
 
 1. 結合の起点（1×1 を除く）。`wrap` なら折り返しありプール、それ以外は折り返しなしプール。
 2. `wrap == 1` または改行を含むセル。折り返しありプール。
@@ -425,12 +434,13 @@ Apps Script が出力し、Source が読む。UTF-8。
 - セットアップ時に無ければ作り、例の行として名前 `#sample`（無効）、範囲 `<設定タブ以外の左端のシート名>!A1:F20`（クォートなし）、見出し FALSE、書式 TRUE を入れる。**例の行は `#` を消すまで公開されない**（範囲を決める前に公開されて Gist の履歴に残るのを防ぐ）。
 - 範囲は自前の `parseRangeRef(text)` → `{sheet, a1}` で解析する。受け付ける形: `シート名!A1:C10`、`'シート名'!A1:C10`（`''` は `'`）、先頭の `'` が消えた `シート名'!A1:C10`、`A1:C10`（シート名省略 = 設定タブ以外の左端）。区切りは最後の `!`（セル先頭の `'` はスプレッドシートが文字列扱いの合図として消すため、この寛容さが必要）。
 - **行ごとの誤りはその行だけ飛ばす**（警告に「「名前」: シート「X」が見つかりません」「「名前」: 範囲「A1:C10」を読めません」を記録）。1 行の誤りで全体の公開を止めない。
-- 名前の重複は先の行を採用して警告。範囲は最大 20 個。
-- 範囲は API を呼ぶ前に、シートの最終行・最終列と上限（100 行 × 20 列）で切り詰める（`A:F` のような列全体の指定でも行ごとの呼び出しが膨らまないように）。
-- H 列の文言は次のとおり。名前と範囲が両方空なら空欄。名前が空で範囲がある場合は `⚠ 名前（A列）が空のため公開されません`。`#` で始まる名前は `非公開（名前の先頭が # のため）`。重複は `⚠ 同じ名前が上の行にあるため使われません`。21 個目以降は `⚠ 範囲は20個までのため省きました`。読み取りエラーは `⚠ ` に利用者向けエラー文を続ける。正常な範囲は `✔ 掲示板に表示されます`。範囲に文字が無い場合は `⚠ 範囲に文字が入っていません`。選択範囲追加後、実行者が公開できない場合は `⏳ 管理者の自動公開を待っています`。注意が複数ある場合は ` ／ ` で続ける。F/G の書き間違いは該当行の状態と共有警告の両方に記録する。
+- 名前の重複は先の行を採用して警告。範囲数に上限は設けない。
+- 範囲は API を呼ぶ前に、シートの最終行・最終列で切り詰める（`A:F` のような列全体の指定でもシートに存在するセルだけを読む）。行数・列数の固定上限は設けない。
+- H 列の文言は次のとおり。名前と範囲が両方空なら空欄。名前が空で範囲がある場合は `⚠ 名前（A列）が空のため公開されません`。`#` で始まる名前は `非公開（名前の先頭が # のため）`。重複は `⚠ 同じ名前が上の行にあるため使われません`。読み取りエラーは `⚠ ` に利用者向けエラー文を続ける。正常な範囲は `✔ 掲示板に表示されます`。5,000 セルを超える場合は大きな範囲の注意を付ける。範囲に文字が無い場合は `⚠ 範囲に文字が入っていません`。選択範囲追加後、実行者が公開できない場合は `⏳ 管理者の自動公開を待っています`。注意が複数ある場合は ` ／ ` で続ける。F/G の書き間違いは該当行の状態と共有警告の両方に記録する。
+- フィルタのあるシートだけフィルタによる非表示判定を行う。非表示の行と列、およびフィルタで除外される行を除いてから値・書式を出力する。
 - J1:J4 は順に `SheetBoard の状態`、`overallStatus_()` のアイコンと文言、次にすること（無ければ空欄）、更新時刻。J4 は `updatedUnix` をシートのタイムゾーンで `掲示板の内容の更新: yyyy/MM/dd HH:mm` と表示する。未公開なら `まだ公開していません`。定期確認時刻は書かない。
 - 状態書き込みは `writeSheetStatus_()` に集約し、H 列と J1:J4 だけを対象にする。H1 が空なら `状態` を書く。現在値と違う場合だけ更新し、保護や権限による失敗は無視して公開を失敗させない。公開成功・失敗・内容変更なしの早期終了、`setPending_()`、`finishSetup`、`disconnectConfirmed`、`addSelectionToBoard()` から呼ぶ。トークンが無い `publish_` の早期終了では呼ばない。`onEditInstalled(e)` と `onChangeInstalled(e)` は、設定タブの H 列以降の編集を無視する。イベント引数や `e.range` が無い場合は従来どおり処理する。
-- 公開に成功した範囲名は `publishedNames`（JSON 配列）として DocumentProperties に保存する。
+- 公開に成功した範囲名は UTF-8 で 8 KB 以内の `publishedNames`（JSON 配列）として DocumentProperties に保存する。保存量を超える場合は一部を省き、状態画面に省いた件数を表示する。
 - 設定タブを新規作成するときだけ、1 行目を固定し、A1:G1 に各列の書き方と例をメモとして付け、H 列を約 300 px、J 列を約 420 px にする。既存シートの書式は変更しない。
 
 #### 6.3.1 全体の状態 `overallStatus_()`
@@ -474,13 +484,13 @@ Apps Script が出力し、Source が読む。UTF-8。
 1. ロックを取る（トリガー経由は `tryLock(0)`、メニュー経由は `tryLock(10000)`）。取れなければ保留フラグを立てて終わる。
 2. 実行者がトークンを持たなければ保留フラグを立てて終わる（§6.2）。
 3. 設定タブを読み、各範囲の表示値と、書式を反映する範囲は書式（§5）を一括取得する。非表示の行・列は出力しない。チェックボックスは `■` / `□`。
-   - 「書式を反映」が TRUE の範囲では、`VALUE_IN_LIST` / `VALUE_IN_RANGE` の入力規則をチップ情報として収集する。`showDropdown=false` とチェックボックス、その他の条件種別は対象外。`VALUE_IN_RANGE` は参照元範囲から表示値の一致するセルの背景色・文字色を借りる（最大 500 セル）。同じ参照元はキャッシュし、範囲超過・取得時の例外は色なしとして扱う。
+   - 「書式を反映」が TRUE の範囲では、`VALUE_IN_LIST` / `VALUE_IN_RANGE` の入力規則をチップ情報として収集する。`showDropdown=false` とチェックボックス、その他の条件種別は対象外。`VALUE_IN_RANGE` は参照元範囲から表示値の一致するセルの背景色・文字色を借りる。同じ参照元はキャッシュし、取得時の例外は色なしとして扱う。参照セル数に固定上限は設けない。
    - Google Sheets API の `DataValidationRule` と Apps Script の `DataValidation` には、チップ自体の色や表示形式（チップ / 矢印 / 書式なし）を読む項目がない。そのため表示形式は判別せず、対象のドロップダウンをチップとして描く。追加の `oauthScopes` は必要なく、スコープは変更していない。
 4. `rev` を計算する。`force` でなく保留フラグも無く、`rev` が前回と同じで、最終公開から 60 分未満なら終わる。
 5. `rev` が変わったときだけ `updatedUnix` を現在時刻にする。`aliveUnix` は常に現在時刻。`updated` はシートのタイムゾーン（`sheetTimeZone()`: スプレッドシート → スクリプト → `Asia/Tokyo`）で ISO 8601。
-6. JSON が 500 KB を超えたらエラー。§6.5 のとおり PATCH。
+6. JSON が 10 MB を超えたら公開を失敗にする。800 KB を超える場合は iPhone 版 VRChat で表示できないことがあるという注意を出すが、公開は続ける。§6.5 のとおり PATCH。 iPhone 向けの注意は、内容が変わらず PATCH を省いた回にも維持する。
 7. 成功したら rev・時刻を保存し、直近のエラーと種類ごとのメール抑止をリセットし、保留フラグを下ろす。警告は内容が変わったときだけ書き込む。
-8. 失敗したら直近のエラーを `<ISO 時刻> <文言>` で記録し、§6.8 の通知。利用者向けの文言は、何が起きたかと誰が何をするかを 1〜2 文で書く。Gist、token、OAuth、HTTP、scope、Device Flow などの用語は出さない。番号を示す場合は文末を `（エラー番号 N）` とする。5xx は一時応答として自動再試行を伝え、403 は管理者の再承認を案内する。500 KB 超過は範囲を小さくするか分割するよう案内する。
+8. 実行開始から 4 分 30 秒を超えた場合は PATCH の前に中断し、Gist の内容を変更せず失敗として記録・通知する。その他の失敗も直近のエラーを `<ISO 時刻> <文言>` で記録し、§6.8 の通知を行う。利用者向けの文言は、何が起きたかと誰が何をするかを 1〜2 文で書く。Gist、token、OAuth、HTTP、scope、Device Flow などの用語は出さない。番号を示す場合は文末を `（エラー番号 N）` とする。5xx は一時応答として自動再試行を伝え、403 は管理者の再承認を案内する。10 MB 超過は範囲を小さくするか分割するよう案内する。
 
 ### 6.7 トリガー
 
@@ -539,12 +549,14 @@ V8、`Asia/Tokyo`、スコープは `spreadsheets.currentonly`、`script.externa
 
 - `baseUrl` は前後の空白を除いて使う。
 - 「URL を適用」: `urls` を `baseUrl + ?v=0..N−1`（既に `?` があれば `&v=`）で作り直す。`N = clamp(ceil(300 / max(30, refreshInterval)) + 1, 4, 64)`。`baseUrl` が空なら `urls` を空にする。
-- 「接続を確認」（非同期、`UnityWebRequest`、`redirectLimit = 0`、User-Agent 付き）: 信頼リスト（config の `stringHostUrlList`、失敗時は内蔵の既定リスト）、HTTP 200 でリダイレクトでないこと、`sheetboard/1` であること、gist URL にコミット SHA が無いこと、`http://` でないことを検査し、範囲名の一覧を表示する。確認中はボタンを無効にし、Poll は例外を捕まえて必ず終了処理をする。User-Agent の版数は定数 1 か所で持つ。
+- 「接続を確認」（非同期、`UnityWebRequest`、`redirectLimit = 0`、User-Agent 付き）: 信頼リスト（config の `stringHostUrlList`、失敗時は内蔵の既定リスト）、HTTP 200 でリダイレクトでないこと、`sheetboard/1` であること、gist URL にコミット SHA が無いこと、`http://` でないことを検査し、範囲名の一覧を表示する。確認中はボタンを無効にし、Poll は例外を捕まえて必ず終了処理をする。User-Agent の版数は定数 1 か所で持つ。Inspector と Apps Script（シート側）の UI は日本語のみ。
 - `baseUrl` が空かつ `urls` が空なら「未適用」警告は出さない。
 - proxy を書き換える操作（このボタン、§7.3 の「同じシーンの Source を自動設定」、§7.1 の Install Sample）は、UdonSharp のプログラムが未コンパイルなら先に `UdonSharpCompilerV1.CompileSync` でコンパイルする。その後 `UdonSharpProgramAsset.AnyUdonSharpScriptHasError()` でプロジェクト全体を確認し、Sheet Board 以外の UdonSharp エラーも含め、エラーまたは未生成のプログラムがあれば止めて Console のエラーを直すよう案内する。初回はプログラムアセット作成後にもう一度実行が必要。
-- `SheetBoardBuildCheck` は通常のビルドでは同じコンパイルエラーでビルドを止める。Play 開始時（`report == null`）は例外で Play を止めず、エラーを Console に記録するだけにする。`baseUrl` が設定されているのに `urls` が未生成、または URL 群が一致しない場合も警告を記録するが、ビルドは止めない。
+- 有効な Source に利用可能な URL が 1 つも無い場合、または `baseUrl` に対して「URL を適用」していない場合はビルドを止める。無効な Source は検査しない。Source が設定されていない有効な Display には警告を出す。コンパイルエラーも通常のビルドを止める。Play 開始時（`report == null`）は例外で Play を止めず、エラーを Console に記録する。
 
 ### 7.3 Display のインスペクター
+
+Display の `language` は Source と同じ `Auto` / `Japanese` / `English` を使い、ワールド内の見出し・状態・更新ボタンを閲覧者の VRChat 言語に合わせる。Editor と Apps Script の UI は日本語のみ。
 
 - `rangeName` の横に、同じ Source の直近の「接続を確認」で得た範囲名を選べるリストを出す。空欄のときは「（空欄 = 最初の範囲）」と添える。
 - Source の Inspector には「同じシーンの Source を自動設定」ボタンを置く。Display の Inspector では、`source` が空でシーンに Source が 1 つなら「シーンから自動設定」ボタンを表示し、複数あれば手動指定を促す HelpBox を表示する。
@@ -573,6 +585,14 @@ V8、`Asia/Tokyo`、スコープは `spreadsheets.currentonly`、`script.externa
 ## 9. 制限
 
 - 反映: セル・書式の編集は数秒〜十数秒（5 秒以内の連続編集は次の確認で）。数式の結果だけの変化は最大約 5 分。ワールド側は約 1 分ごとに取得。
+- 行数・列数・公開範囲数・オーバーレイ数に利用上の上限は設けない。大きな表ほど処理が重くなり、文字は小さくなる。以下は外部仕様または描画方式による技術的な天井であり、該当時は切り捨て・中断・注意表示で利用者に知らせる。
+  - 1 セルに表示できる文字は 4,000 文字まで（TMP の 1 メッシュあたり 16,383 文字の天井に対する安全側の値）。これを超えるセルは末尾を `…` に置き換える。
+  - Apps Script の公開処理は 1 回 4 分 30 秒を予算とする。超過時は PATCH 前に中断し、Gist を変更せず失敗を通知する。
+  - JSON は 10 MB まで。超える場合は公開を失敗にする（Gist raw が全文を返せる上限）。
+  - JSON が 800 KB を超えると iPhone 版 VRChat で表示できないことがあるため注意を出す。公開は続ける。
+  - 5,000 セルを超える範囲には、公開に時間がかかり文字が小さくなる注意を出す。
+  - 無料 Google アカウントのトリガー総実行時間は 1 日 90 分。大きな表を 5 分ごとに読み直すとこの枠を使い切るおそれがある（未計測）。
+  - Apps Script の状態保存値は UTF-8 で 8 KB 以内。範囲名が多すぎる場合は一部を省き、件数を表示する。
 - Gist の CDN キャッシュ（300 秒）は URL ローテーションで避けるが、他のクライアントが直前に読んだ同じ URL からは古い版が返りうる（§3.4 の巻き戻り防止で表示は戻らない）。
 - URL には GitHub のユーザー名、Gist の説明にはスプレッドシート名が入る。
 - 再現できないもの: 条件付き書式の色、罫線（代わりに格子。罫線を読むには Sheets API と全スプレッドシートの閲覧権限が必要なため、権限を広げない方針で見送り）、画像・グラフ・図形、絵文字やフォントに無い記号、フォントの種類、縦位置（中央固定）。

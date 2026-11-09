@@ -2,7 +2,30 @@
 
 All notable changes to this package are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the package uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] - 2026-11-09
+
+### Added
+
+- Add automatic Japanese or English in-world messages, following each visitor's VRChat language by default.
+- Warn when a published range exceeds 5,000 visible cells or JSON exceeds about 800 KB for iPhone compatibility.
+- Add build checks for active Sources with missing or unapplied URLs, and warn when a Display has no Source.
+
+### Changed
+
+- Remove configured limits on range count, table rows and columns, and overlay count. Display pools now grow as needed.
+- Exclude manually hidden rows and columns from published output; also exclude filtered rows when the sheet has a filter.
+- Enforce a 4 minute 30 second publishing budget, a 10 MB JSON ceiling, and an 8 KB UTF-8 limit for saved state values. Publishing over the time or JSON limit fails visibly and leaves the existing Gist unchanged.
+- Use text fields as overrides: blank fields and values matching their old Japanese defaults use the selected language's default text. Display up to 4,000 characters per cell and split column text into row-block segments.
+
+### Removed
+
+- Remove the Display fields `maxRows`, `maxCols`, and `maxOverlays`.
+
+### Fixed
+
+- Keep wrapping and merged-cell rendering when overlays are used; empty cells no longer consume overlays.
+- Stop rendering the literal eight-character `</alpha>` closing tag as transparent text.
+- Apply hidden-row and filter removal before building the complete range output instead of truncating to 100 rows first.
 
 ## [0.3.1] - 2026-11-08
 

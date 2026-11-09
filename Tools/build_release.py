@@ -27,38 +27,71 @@ def guid(meta: Path) -> str:
 def validate(tag: str | None) -> tuple[dict, list[Path]]:
     manifest = json.loads((PACKAGE / "package.json").read_text(encoding="utf-8"))
     version = manifest["version"]
-    assert manifest["name"] == NAME
-    assert re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version), "Use a stable SemVer version"
-    assert tag is None or tag == version, f"Tag {tag} differs from package version {version}"
-    assert manifest["url"] == f"https://github.com/{REPOSITORY}/releases/download/{version}/{NAME}-{version}.zip"
-    assert manifest["unity"] == "2022.3"
-    assert manifest["vpmDependencies"]["com.vrchat.worlds"]
-    assert "zipSHA256" not in manifest, "ZIP hash belongs in the listing, outside the ZIP"
+    if manifest["name"] != NAME:
+        raise SystemExit(f"Package name must be {NAME}")
+    if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
+        raise SystemExit("Use a stable SemVer version")
+    if tag is not None and tag != version:
+        raise SystemExit(f"Tag {tag} differs from package version {version}")
+    if manifest["url"] != f"https://github.com/{REPOSITORY}/releases/download/{version}/{NAME}-{version}.zip":
+        raise SystemExit("Package release URL does not match its version")
+    if manifest["unity"] != "2022.3":
+        raise SystemExit("Package must target Unity 2022.3")
+    if not manifest["vpmDependencies"]["com.vrchat.worlds"]:
+        raise SystemExit("Package must declare its VRChat Worlds dependency")
+    if "zipSHA256" in manifest:
+        raise SystemExit("ZIP hash belongs in the listing, outside the ZIP")
+    release_notes_path = ROOT / "docs" / "RELEASE_NOTES.md"
+    release_notes = release_notes_path.read_text(encoding="utf-8")
+    first_line = release_notes.splitlines()[0] if release_notes.splitlines() else ""
+    declaration = re.fullmatch(r"<!-- version: ([^<>\s]+) -->", first_line)
+    declared_version = declaration[1] if declaration else first_line or "(なし)"
+    if first_line != f"<!-- version: {version} -->":
+        raise SystemExit(f"docs/RELEASE_NOTES.md の版宣言 ({declared_version}) が package.json の版 ({version}) と一致しません。リリースノートを書き換えてください。")
+    changelog = (PACKAGE / "CHANGELOG.md").read_text(encoding="utf-8")
+    changelog_heading = re.compile(rf"^## \[{re.escape(version)}\](?:\s|$)", re.MULTILINE)
+    if not changelog_heading.search(changelog):
+        raise SystemExit(f"CHANGELOG.md に {version} の見出しがありません。")
     files = sorted(path for path in PACKAGE.rglob("*") if path.is_file())
+    for path in files:
+        filename = path.name
+        if "競合コピー" in filename or "conflicted copy" in filename.lower():
+            raise SystemExit(f"Conflicted copy filename is not allowed in release archives: {path}")
+        if filename.endswith((".orig", ".rej", ".bak", "~")):
+            raise SystemExit(f"Backup filename is not allowed in release archives: {path}")
     seen = {}
     for path in files:
         if path.suffix == ".meta":
-            assert Path(str(path)[:-5]).exists(), f"Orphan metadata: {path}"
+            if not Path(str(path)[:-5]).exists():
+                raise SystemExit(f"Orphan metadata: {path}")
             value = guid(path)
-            assert value not in seen, f"Duplicate GUID: {path} and {seen.get(value)}"
+            if value in seen:
+                raise SystemExit(f"Duplicate GUID: {path} and {seen.get(value)}")
             seen[value] = path
         else:
-            assert Path(str(path) + ".meta").is_file(), f"Missing metadata: {path}"
-        assert not any(part in {"SheetBoardDev", ".git", "Library", "Logs"} for part in path.relative_to(PACKAGE).parts)
+            if not Path(str(path) + ".meta").is_file():
+                raise SystemExit(f"Missing metadata: {path}")
+        if any(part in {"SheetBoardDev", ".git", "Library", "Logs"} for part in path.relative_to(PACKAGE).parts):
+            raise SystemExit(f"Development or generated file is not allowed in release archives: {path}")
     for directory in PACKAGE.rglob("*"):
         if directory.is_dir():
-            assert Path(str(directory) + ".meta").is_file(), f"Missing folder metadata: {directory}"
+            if not Path(str(directory) + ".meta").is_file():
+                raise SystemExit(f"Missing folder metadata: {directory}")
     for behavior in ("SheetBoardSource", "SheetBoardDisplay"):
         text = (PACKAGE / "Runtime" / (behavior + ".asset")).read_text(encoding="utf-8")
         match = re.search(r"serializedUdonProgramAsset:.*?guid: ([0-9a-f]{32})", text)
-        assert match and match[1] in seen, f"Compiled Udon program is not bundled: {behavior}"
+        if not match or match[1] not in seen:
+            raise SystemExit(f"Compiled Udon program is not bundled: {behavior}")
         compiled = Path(str(seen[match[1]])[:-5])
-        assert compiled.stat().st_size > 100, f"Empty compiled program: {compiled}"
+        if compiled.stat().st_size <= 100:
+            raise SystemExit(f"Empty compiled program: {compiled}")
     for required in ("AppsScript/SheetBoard.gs", "AppsScript/appsscript.json", "Fonts/NotoSansJP-Regular.otf", "Fonts/OFL-1.1.txt", "LICENSE", "README.ja.md"):
-        assert (PACKAGE / required).is_file(), f"Missing distribution file: {required}"
+        if not (PACKAGE / required).is_file():
+            raise SystemExit(f"Missing distribution file: {required}")
     font = (PACKAGE / "Fonts/SheetBoard JP Dynamic.asset").read_text(encoding="utf-8")
     for flag in ("m_AtlasPopulationMode: 1", "m_ClearDynamicDataOnBuild: 1", "m_GlyphTable: []", "m_CharacterTable: []"):
-        assert flag in font, f"Export the font from Unity before releasing: missing {flag}"
+        if flag not in font:
+            raise SystemExit(f"Export the font from Unity before releasing: missing {flag}")
     print(f"Package OK: {len(files)} files, unique GUIDs, both Udon programs bundled, empty dynamic font")
     return manifest, files
 
@@ -109,10 +142,13 @@ def build(output: Path, tag: str | None) -> None:
 def verify_archives(output: Path, files: list[Path], manifest: dict) -> None:
     stem = f"{NAME}-{manifest['version']}"
     with zipfile.ZipFile(output / (stem + ".zip")) as archive:
-        assert "package.json" in archive.namelist(), "VPM manifest must be at archive root"
-        assert set(archive.namelist()) == {path.relative_to(PACKAGE).as_posix() for path in files}
+        if "package.json" not in archive.namelist():
+            raise SystemExit("VPM manifest must be at archive root")
+        if set(archive.namelist()) != {path.relative_to(PACKAGE).as_posix() for path in files}:
+            raise SystemExit("VPM ZIP contents do not match package files")
         for path in files:
-            assert archive.read(path.relative_to(PACKAGE).as_posix()) == path.read_bytes()
+            if archive.read(path.relative_to(PACKAGE).as_posix()) != path.read_bytes():
+                raise SystemExit(f"VPM ZIP file content differs from package: {path}")
     with tarfile.open(output / (stem + ".unitypackage"), "r:gz") as archive:
         members = {member.name: member for member in archive.getmembers()}
         count = 0
@@ -120,13 +156,16 @@ def verify_archives(output: Path, files: list[Path], manifest: dict) -> None:
             if not name.endswith("/pathname"):
                 continue
             pathname = archive.extractfile(members[name]).read().decode("utf-8")
-            assert pathname == "Assets/SheetBoard" or pathname.startswith("Assets/SheetBoard/")
+            if pathname != "Assets/SheetBoard" and not pathname.startswith("Assets/SheetBoard/"):
+                raise SystemExit(f"UnityPackage path is outside Assets/SheetBoard: {pathname}")
             asset_name = name.rsplit("/", 1)[0] + "/asset"
             if asset_name in members:
                 source = PACKAGE / pathname.removeprefix("Assets/SheetBoard/")
-                assert archive.extractfile(members[asset_name]).read() == source.read_bytes()
+                if archive.extractfile(members[asset_name]).read() != source.read_bytes():
+                    raise SystemExit(f"UnityPackage file content differs from package: {pathname}")
                 count += 1
-        assert count == sum(path.suffix != ".meta" for path in files)
+        if count != sum(path.suffix != ".meta" for path in files):
+            raise SystemExit("UnityPackage asset count does not match package files")
     print("Archive contents OK: VPM root manifest, preserved bytes and GUIDs, no SDK or development files")
 
 

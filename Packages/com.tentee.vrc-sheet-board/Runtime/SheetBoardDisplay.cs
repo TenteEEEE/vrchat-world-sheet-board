@@ -10,17 +10,22 @@ namespace SheetBoard
     [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
     public class SheetBoardDisplay : UdonSharpBehaviour
     {
+        private const string JapaneseRangeMissingText = "範囲「{name}」が見つかりません";
+        private const string EnglishRangeMissingText = "Range \"{name}\" was not found.";
+        private const string JapaneseSourceMissingText = "Sourceが設定されていません";
+        private const string EnglishSourceMissingText = "No Source is set.";
+        private const string JapaneseRefreshIdleText = "更新";
+        private const string EnglishRefreshIdleText = "Refresh";
+
         [Header("Settings")]
         public SheetBoardSource source;
+        public SheetBoardLanguage language = SheetBoardLanguage.Auto;
         public string rangeName = "";
-        public int maxRows = 40;
-        public int maxCols = 12;
         public bool showTitle = true;
         public bool zebra = false;
         public bool lightTheme = true;
         public bool showGrid = true;
         public float gridWidth = 1f;
-        public int maxOverlays = 24;
         public float nearCheckInterval = 1f;
         public float maxRowHeight = 64f;
         public float textScale = 1.4f;
@@ -31,9 +36,9 @@ namespace SheetBoard
         [Header("Colours")]
         public Color boardColor, bodyColor, gridColor, headerBackgroundColor, zebraColor, chipColor, chipArrowColor, normalColor, staleColor, errorColor, busyColor, refreshButtonColor, refreshLabelColor, refreshDisabledColor, refreshDisabledLabelColor;
         [Header("Texts")]
-        public string rangeMissingText = "範囲「{name}」が見つかりません";
-        public string sourceMissingText = "Sourceが設定されていません";
-        public string refreshIdleText = "更新";
+        public string rangeMissingText = "";
+        public string sourceMissingText = "";
+        public string refreshIdleText = "";
 
         [Header("Internal references (installer-wired)")]
         public Image background;
@@ -46,7 +51,9 @@ namespace SheetBoard
 
         private const float MinInterval = 0.25f, MaxInterval = 1.5f, Padding = 6f, DefaultTextScale = 1.4f;
         private const float ChipMinContrast = 3f;
-        private const int MaxCellChars = 200;
+        // Conservative safety value below TMP's 16,383-character per-mesh ceiling.
+        private const int CellGlyphCeiling = 4000;
+        private const int SegmentGlyphBudget = 6000;
         private const float ChipMargin = 3f, ChipHeightEm = 1.55f, ChipPadEm = 0.45f, ArrowWidthEm = 0.62f, ArrowHeightEm = 0.36f, ChipExtraEm = 1.3f, ChipSpriteHeight = 64f;
         private const float MinFontFactor = 0.6f, MaxFontFactor = 1.6f;
         private const int MinMeasuredColumnWidth = 2, MaxMeasuredColumnWidth = 40;
@@ -61,24 +68,32 @@ namespace SheetBoard
         private bool busyLampOn;
         private SheetBoardSource displayedSource;
         private bool colorsReady;
-        private RectTransform[] frames;
-        private TMP_Text[] columns;
+        private RectTransform[] segmentFrames;
+        private TMP_Text[] segments;
         private Image[] cells;
         private Image[] chips, arrows;
         private RectTransform chipContainer, arrowContainer;
         private int chipCount;
         private bool chipPoolUnavailable;
         private bool warnedChipPool;
-        private Image grid;
         private RectTransform[] overlayFrames;
         private TMP_Text[] overlays;
         private RectTransform[] overlayNoWrapFrames;
         private TMP_Text[] overlaysNoWrap;
         private int cellCount;
+        private int cellCreatedCount;
         private int overlayCount;
+        private int overlayCreatedCount;
         private int overlayNoWrapCount;
+        private int overlayNoWrapCreatedCount;
+        private int segmentCount;
+        private int segmentCreatedCount;
+        private int chipCreatedCount;
         private int displayedRevision = -1;
-        private RectTransform[] columnTextRects;
+        private RectTransform[] segmentTextRects;
+        private int[] segmentColumn;
+        private int[] segmentFirstRow;
+        private int[] segmentLastRow;
         private RectTransform[] overlayTextRects;
         private RectTransform[] overlayNoWrapTextRects;
         private float workBasePt;
@@ -99,6 +114,37 @@ namespace SheetBoard
         private Image refreshButtonImage;
         private bool overlayPoolUnavailable;
         private bool overlayNoWrapPoolUnavailable;
+        private bool cellPoolUnavailable;
+        private bool warnedCellPool;
+        private bool warnedOverlayPool;
+        private bool warnedOverlayNoWrapPool;
+        private bool segmentPoolUnavailable;
+        private bool warnedSegmentPool;
+        private Image grid;
+        private SheetBoardLanguage resolvedLanguage = SheetBoardLanguage.English;
+        private bool languageResolved;
+        private bool rangeMissingShown;
+
+        private void ResolveLanguage()
+        {
+            if (language == SheetBoardLanguage.Japanese) { resolvedLanguage = SheetBoardLanguage.Japanese; languageResolved = true; return; }
+            if (language == SheetBoardLanguage.English) { resolvedLanguage = SheetBoardLanguage.English; languageResolved = true; return; }
+            string current = VRCPlayerApi.GetCurrentLanguage();
+            resolvedLanguage = !string.IsNullOrEmpty(current) && current.Length >= 2 && (current[0] == 'j' || current[0] == 'J') && (current[1] == 'a' || current[1] == 'A') ? SheetBoardLanguage.Japanese : SheetBoardLanguage.English;
+            languageResolved = true;
+        }
+
+        private string ResolveText(string value, string japanese, string english)
+        {
+            if (!languageResolved) ResolveLanguage();
+            if (string.IsNullOrEmpty(value)) return resolvedLanguage == SheetBoardLanguage.Japanese ? japanese : english;
+            if (value == japanese) return resolvedLanguage == SheetBoardLanguage.Japanese ? japanese : english;
+            return value;
+        }
+
+        private string GetRangeMissingText() { return ResolveText(rangeMissingText, JapaneseRangeMissingText, EnglishRangeMissingText); }
+        private string GetSourceMissingText() { return ResolveText(sourceMissingText, JapaneseSourceMissingText, EnglishSourceMissingText); }
+        private string GetRefreshIdleText() { return ResolveText(refreshIdleText, JapaneseRefreshIdleText, EnglishRefreshIdleText); }
 
         private void InitColors()
         {
@@ -128,6 +174,7 @@ namespace SheetBoard
 
         private void OnEnable()
         {
+            ResolveLanguage();
             if (refreshButton == null) refreshButton = GetComponentInChildren<Button>();
             if (refreshButton != null) refreshButtonImage = refreshButton.GetComponent<Image>();
             if (refreshLabel == null && refreshButton != null) refreshLabel = refreshButton.GetComponentInChildren<TMP_Text>();
@@ -142,6 +189,16 @@ namespace SheetBoard
             float delay = Random.Range(0f, interval);
             nextWatchAt = now + delay;
             SendCustomEventDelayedSeconds(nameof(_Watch), delay);
+        }
+
+        public override void OnLanguageChanged(string language)
+        {
+            bool rerenderRangeMissing = rangeMissingShown;
+            ResolveLanguage();
+            int access = source == null ? 2 : source.GetAccessStatus();
+            bool busy = source != null && access == 0 && source.IsBusy();
+            RefreshIndicators(access, busy);
+            if (rerenderRangeMissing) RenderNow();
         }
 
         public void _Watch()
@@ -173,11 +230,11 @@ namespace SheetBoard
         private void RefreshIndicators(int access, bool busy)
         {
             InitColors();
-            if (source == null) SetStatus(sourceMissingText, errorColor);
+            if (source == null) SetStatus(GetSourceMissingText(), errorColor);
             else if (access != 0)
             {
                 if (displayedSource != source || displayedRevision != source.GetRevision()) RenderNow();
-                SetStatus(access == 2 ? source.permissionDeniedText : source.permissionWaitingText, errorColor);
+                SetStatus(access == 2 ? source.GetPermissionDeniedText() : source.GetPermissionWaitingText(), errorColor);
             }
             else
             {
@@ -211,7 +268,7 @@ namespace SheetBoard
             {
                 Color labelColor = interactable ? refreshLabelColor : refreshDisabledLabelColor;
                 if (refreshLabel.color != labelColor) refreshLabel.color = labelColor;
-                string label = refreshIdleText;
+                string label = GetRefreshIdleText();
                 if (refreshLabel.text != label) refreshLabel.text = label;
             }
         }
@@ -223,59 +280,144 @@ namespace SheetBoard
                 warnedTemplates = true;
                 Debug.LogWarning("SheetBoardDisplay: missing table area or template reference.");
             }
-            if (frames != null || tableArea == null || columnTemplate == null || cellTemplate == null) return;
-            frames = new RectTransform[Mathf.Max(0, maxCols)];
-            columns = new TMP_Text[frames.Length];
-            columnTextRects = new RectTransform[frames.Length];
-            cells = new Image[Mathf.Max(0, maxRows) * frames.Length];
-            chips = new Image[Mathf.Max(0, maxRows) * frames.Length];
-            arrows = new Image[chips.Length];
-            overlayFrames = new RectTransform[Mathf.Max(0, maxOverlays)];
-            overlays = new TMP_Text[overlayFrames.Length];
-            overlayTextRects = new RectTransform[overlayFrames.Length];
-            overlayNoWrapFrames = new RectTransform[Mathf.Max(0, maxOverlays)];
-            overlaysNoWrap = new TMP_Text[overlayNoWrapFrames.Length];
-            overlayNoWrapTextRects = new RectTransform[overlayNoWrapFrames.Length];
+            if ((tableArea == null || cellTemplate == null) && !warnedCellPool) { warnedCellPool = true; cellPoolUnavailable = true; Debug.LogWarning("SheetBoardDisplay: cell pool unavailable. count=" + cellCreatedCount); }
+            if ((tableArea == null || columnTemplate == null) && !warnedSegmentPool) { warnedSegmentPool = true; segmentPoolUnavailable = true; Debug.LogWarning("SheetBoardDisplay: segment pool unavailable. count=" + segmentCreatedCount); }
+            if ((tableArea == null || overlayTemplate == null) && !warnedOverlayPool) { warnedOverlayPool = true; overlayPoolUnavailable = true; Debug.LogWarning("SheetBoardDisplay: overlay pool unavailable. count=" + overlayCreatedCount); }
+            if ((tableArea == null || overlayNoWrapTemplate == null) && !warnedOverlayNoWrapPool) { warnedOverlayNoWrapPool = true; overlayNoWrapPoolUnavailable = true; Debug.LogWarning("SheetBoardDisplay: overlayNoWrap pool unavailable. count=" + overlayNoWrapCreatedCount); }
+            if ((tableArea == null || chipTemplate == null || arrowTemplate == null) && !warnedChipPool) { warnedChipPool = true; chipPoolUnavailable = true; Debug.LogWarning("SheetBoardDisplay: chip pool unavailable. count=" + chipCreatedCount); }
+            if (cells != null || tableArea == null || columnTemplate == null || cellTemplate == null) return;
+            segmentFrames = new RectTransform[0];
+            segments = new TMP_Text[0];
+            segmentTextRects = new RectTransform[0];
+            segmentColumn = new int[0];
+            segmentFirstRow = new int[0];
+            segmentLastRow = new int[0];
+            cells = new Image[0];
+            chips = new Image[0];
+            arrows = new Image[0];
+            overlayFrames = new RectTransform[0];
+            overlays = new TMP_Text[0];
+            overlayTextRects = new RectTransform[0];
+            overlayNoWrapFrames = new RectTransform[0];
+            overlaysNoWrap = new TMP_Text[0];
+            overlayNoWrapTextRects = new RectTransform[0];
             GameObject underlay = Instantiate(cellTemplate.gameObject, tableArea);
             grid = underlay.GetComponent<Image>();
             underlay.transform.SetAsFirstSibling();
             underlay.SetActive(false);
             chipContainer = chipTemplate == null || chipTemplate.transform.parent == null ? null : (RectTransform)chipTemplate.transform.parent;
             arrowContainer = arrowTemplate == null || arrowTemplate.transform.parent == null ? null : (RectTransform)arrowTemplate.transform.parent;
-            for (int i = 0; i < frames.Length; i++)
+        }
+
+        private int GrowCapacity(int current, int required)
+        {
+            int capacity = Mathf.Max(1, current);
+            while (capacity < required) capacity *= 2;
+            return Mathf.Max(required, capacity);
+        }
+
+        private void EnsureImageCapacity(int required)
+        {
+            if (cells.Length >= required) return;
+            int size = GrowCapacity(cells.Length, required);
+            Image[] next = new Image[size];
+            System.Array.Copy(cells, next, cells.Length);
+            cells = next;
+        }
+
+        private void EnsureChipCapacity(int required)
+        {
+            if (chips.Length >= required) return;
+            int size = GrowCapacity(chips.Length, required);
+            Image[] nextChips = new Image[size];
+            Image[] nextArrows = new Image[size];
+            System.Array.Copy(chips, nextChips, chips.Length);
+            System.Array.Copy(arrows, nextArrows, arrows.Length);
+            chips = nextChips;
+            arrows = nextArrows;
+        }
+
+        private void EnsureRectCapacity(int required, bool noWrap)
+        {
+            RectTransform[] sourceFrames = noWrap ? overlayNoWrapFrames : overlayFrames;
+            if (sourceFrames.Length >= required) return;
+            int size = GrowCapacity(sourceFrames.Length, required);
+            RectTransform[] nextFrames = new RectTransform[size];
+            TMP_Text[] nextTexts = new TMP_Text[size];
+            RectTransform[] nextTextRects = new RectTransform[size];
+            System.Array.Copy(sourceFrames, nextFrames, sourceFrames.Length);
+            if (noWrap)
             {
-                GameObject frame = Instantiate(columnTemplate.GetComponent<RectTransform>().parent.gameObject, tableArea);
-                frames[i] = (RectTransform)frame.transform;
-                columns[i] = frame.GetComponentInChildren<TMP_Text>(true);
-                if (columns[i] != null)
-                {
-                    columnTextRects[i] = columns[i].GetComponent<RectTransform>();
-                    columnTextRects[i].anchorMin = Vector2.zero;
-                    columnTextRects[i].anchorMax = Vector2.one;
-                    columnTextRects[i].offsetMin = new Vector2(Padding, 0f);
-                    columnTextRects[i].offsetMax = new Vector2(-Padding, 0f);
-                    columnTextRects[i].gameObject.SetActive(true);
-                }
-                frame.SetActive(false);
+                System.Array.Copy(overlaysNoWrap, nextTexts, overlaysNoWrap.Length);
+                System.Array.Copy(overlayNoWrapTextRects, nextTextRects, overlayNoWrapTextRects.Length);
+                overlayNoWrapFrames = nextFrames; overlaysNoWrap = nextTexts; overlayNoWrapTextRects = nextTextRects;
             }
+            else
+            {
+                System.Array.Copy(overlays, nextTexts, overlays.Length);
+                System.Array.Copy(overlayTextRects, nextTextRects, overlayTextRects.Length);
+                overlayFrames = nextFrames; overlays = nextTexts; overlayTextRects = nextTextRects;
+            }
+        }
+
+        private void EnsureTextCapacity(int required)
+        {
+            if (segments.Length >= required) return;
+            int size = GrowCapacity(segments.Length, required);
+            RectTransform[] nextFrames = new RectTransform[size];
+            TMP_Text[] nextTexts = new TMP_Text[size];
+            RectTransform[] nextTextRects = new RectTransform[size];
+            int[] nextColumns = new int[size];
+            int[] nextFirstRows = new int[size];
+            int[] nextLastRows = new int[size];
+            System.Array.Copy(segmentFrames, nextFrames, segmentFrames.Length);
+            System.Array.Copy(segments, nextTexts, segments.Length);
+            System.Array.Copy(segmentTextRects, nextTextRects, segmentTextRects.Length);
+            System.Array.Copy(segmentColumn, nextColumns, segmentColumn.Length);
+            System.Array.Copy(segmentFirstRow, nextFirstRows, segmentFirstRow.Length);
+            System.Array.Copy(segmentLastRow, nextLastRows, segmentLastRow.Length);
+            segmentFrames = nextFrames; segments = nextTexts; segmentTextRects = nextTextRects;
+            segmentColumn = nextColumns; segmentFirstRow = nextFirstRows; segmentLastRow = nextLastRows;
         }
 
         private Image GetCellRect()
         {
-            if (cellCount >= cells.Length) return null;
+            if (cellPoolUnavailable || cellTemplate == null || tableArea == null)
+            {
+                if (!warnedCellPool) { warnedCellPool = true; Debug.LogWarning("SheetBoardDisplay: cell pool unavailable. count=" + cellCreatedCount); }
+                cellPoolUnavailable = true;
+                return null;
+            }
+            EnsureImageCapacity(cellCount + 1);
             if (cells[cellCount] == null)
             {
                 GameObject obj = Instantiate(cellTemplate.gameObject, tableArea);
                 cells[cellCount] = obj.GetComponent<Image>();
                 obj.transform.SetAsFirstSibling();
                 grid.transform.SetAsFirstSibling();
+                cellCreatedCount++;
             }
             return cells[cellCount++];
         }
 
         private int GetOverlayIndex(RectTransform[] poolFrames, TMP_Text[] poolTexts, RectTransform[] poolTextRects, TMP_Text template, int count, bool noWrap)
         {
-            if (template == null || (noWrap ? overlayNoWrapPoolUnavailable : overlayPoolUnavailable) || count >= poolTexts.Length) return -1;
+            bool unavailable = noWrap ? overlayNoWrapPoolUnavailable : overlayPoolUnavailable;
+            bool warned = noWrap ? warnedOverlayNoWrapPool : warnedOverlayPool;
+            if (template == null || tableArea == null || unavailable)
+            {
+                if (!warned)
+                {
+                    Debug.LogWarning("SheetBoardDisplay: " + (noWrap ? "overlayNoWrap" : "overlay") + " pool unavailable. count=" + (noWrap ? overlayNoWrapCreatedCount : overlayCreatedCount));
+                    if (noWrap) warnedOverlayNoWrapPool = true; else warnedOverlayPool = true;
+                }
+                if (noWrap) overlayNoWrapPoolUnavailable = true; else overlayPoolUnavailable = true;
+                return -1;
+            }
+            EnsureRectCapacity(count + 1, noWrap);
+            poolFrames = noWrap ? overlayNoWrapFrames : overlayFrames;
+            poolTexts = noWrap ? overlaysNoWrap : overlays;
+            poolTextRects = noWrap ? overlayNoWrapTextRects : overlayTextRects;
             if (poolTexts[count] == null)
             {
                 GameObject obj = Instantiate(template.GetComponent<RectTransform>().parent.gameObject, tableArea);
@@ -286,6 +428,8 @@ namespace SheetBoard
                     Destroy(obj);
                     if (noWrap) overlayNoWrapPoolUnavailable = true;
                     else overlayPoolUnavailable = true;
+                    if (noWrap) { if (!warnedOverlayNoWrapPool) { warnedOverlayNoWrapPool = true; Debug.LogWarning("SheetBoardDisplay: overlayNoWrap pool unavailable. count=" + overlayNoWrapCreatedCount); } }
+                    else if (!warnedOverlayPool) { warnedOverlayPool = true; Debug.LogWarning("SheetBoardDisplay: overlay pool unavailable. count=" + overlayCreatedCount); }
                     return -1;
                 }
                 poolTextRects[count] = poolTexts[count].GetComponent<RectTransform>();
@@ -294,6 +438,7 @@ namespace SheetBoard
                 poolTextRects[count].offsetMin = Vector2.zero;
                 poolTextRects[count].offsetMax = Vector2.zero;
                 poolTextRects[count].gameObject.SetActive(true);
+                if (noWrap) overlayNoWrapCreatedCount++; else overlayCreatedCount++;
             }
             return count;
         }
@@ -410,14 +555,14 @@ namespace SheetBoard
         {
             if (keepLines) value = value.Replace("\r\n", "\n").Replace("\r", "\n");
             else value = value.Replace("\r\n", " ").Replace("\n", " ").Replace("\r", " ");
-            if (value.Length > MaxCellChars)
+            if (value.Length > CellGlyphCeiling)
             {
-                int length = MaxCellChars;
+                int length = CellGlyphCeiling;
                 char last = value[length - 1];
                 if (last >= 0xD800 && last <= 0xDBFF) length--;
                 value = value.Substring(0, length) + "…";
             }
-            return value.Replace("<", "<\u200B");
+            return value.Replace("<", "<noparse><</noparse>");
         }
 
         private string Styled(string raw, int bits, float pt, Color fg, bool hasFg, Color bg, bool hasBg, float basePt, bool header, bool keepLines, string bodyHex)
@@ -463,39 +608,38 @@ namespace SheetBoard
 
         public void RenderNow()
         {
+            rangeMissingShown = false;
             displayedSource = null; displayedRevision = -1;
+            workRows = 0; workCols = 0;
             InitColors();
             workBodyHex = Hex(bodyColor);
             if (background != null) background.color = boardColor;
             if (titleText != null) titleText.color = bodyColor;
             if (statusText != null) statusText.color = bodyColor;
             InitPools();
-            if (frames == null) return;
-            for (int i = 0; i < frames.Length; i++) frames[i].gameObject.SetActive(false);
-            for (int i = 0; i < columns.Length; i++) if (columns[i] != null) columns[i].text = "";
-            for (int i = 0; i < cellCount; i++) if (cells[i] != null) cells[i].gameObject.SetActive(false);
-            for (int i = 0; i < overlays.Length; i++) { if (overlays[i] != null) overlays[i].text = ""; if (overlayFrames[i] != null) overlayFrames[i].gameObject.SetActive(false); }
-            for (int i = 0; i < overlaysNoWrap.Length; i++) { if (overlaysNoWrap[i] != null) overlaysNoWrap[i].text = ""; if (overlayNoWrapFrames[i] != null) overlayNoWrapFrames[i].gameObject.SetActive(false); }
-            for (int i = 0; i < chips.Length; i++) { if (chips[i] != null) chips[i].gameObject.SetActive(false); if (arrows[i] != null) arrows[i].gameObject.SetActive(false); }
+            if (segmentFrames == null) return;
+            for (int i = 0; i < segmentCreatedCount; i++) { if (segmentFrames[i] != null) segmentFrames[i].gameObject.SetActive(false); if (segments[i] != null) segments[i].text = ""; }
+            for (int i = 0; i < cellCreatedCount; i++) if (cells[i] != null) cells[i].gameObject.SetActive(false);
+            for (int i = 0; i < overlayCreatedCount; i++) { if (overlays[i] != null) overlays[i].text = ""; if (overlayFrames[i] != null) overlayFrames[i].gameObject.SetActive(false); }
+            for (int i = 0; i < overlayNoWrapCreatedCount; i++) { if (overlaysNoWrap[i] != null) overlaysNoWrap[i].text = ""; if (overlayNoWrapFrames[i] != null) overlayNoWrapFrames[i].gameObject.SetActive(false); }
+            for (int i = 0; i < chipCreatedCount; i++) { if (chips[i] != null) chips[i].gameObject.SetActive(false); if (arrows[i] != null) arrows[i].gameObject.SetActive(false); }
             if (titleText != null) titleText.text = "";
-            cellCount = 0; overlayCount = 0; overlayNoWrapCount = 0; chipCount = 0; chipPoolUnavailable = false; grid.gameObject.SetActive(false);
+            cellCount = 0; overlayCount = 0; overlayNoWrapCount = 0; segmentCount = 0; chipCount = 0; chipPoolUnavailable = false; grid.gameObject.SetActive(false);
             if (source == null) return;
             if (tableArea.rect.width <= 0f || tableArea.rect.height <= 0f || textScale <= 0f || maxRowHeight <= 0f) return;
             if (!source.HasData()) { displayedSource = source; displayedRevision = source.GetRevision(); return; }
             string name = string.IsNullOrEmpty(rangeName) ? source.GetFirstRangeName() : rangeName;
             DataDictionary range = source.GetRange(name);
-            if (range == null) { if (titleText != null) titleText.text = rangeMissingText.Replace("{name}", name); displayedSource = source; displayedRevision = source.GetRevision(); return; }
+            if (range == null) { if (titleText != null) titleText.text = GetRangeMissingText().Replace("{name}", name); rangeMissingShown = true; displayedSource = source; displayedRevision = source.GetRevision(); return; }
             DataToken token;
             if (titleText != null) titleText.text = showTitle && range.TryGetValue("title", out token) && token.TokenType == TokenType.String ? Clean(Value(token), false) : "";
             bool header = range.TryGetValue("header", out token) && token.TokenType == TokenType.Boolean && token.Boolean;
             DataList rows = ListValue(range, "rows"), widths = ListValue(range, "cols"), colw = ListValue(range, "colw"), rowh = ListValue(range, "rowh");
             DataList align = ListValue(range, "align"), ha = ListValue(range, "ha"), bold = ListValue(range, "bold"), styles = ListValue(range, "style");
             DataList sizes = ListValue(range, "size"), colors = ListValue(range, "color"), backgrounds = ListValue(range, "bg"), merges = ListValue(range, "merges"), wrap = ListValue(range, "wrap"), chip = ListValue(range, "chip");
-            int nr = rows == null ? 0 : Mathf.Min(rows.Count, Mathf.Max(0, maxRows));
-            nr = frames.Length == 0 ? 0 : Mathf.Min(nr, cells.Length / frames.Length);
+            int nr = rows == null ? 0 : rows.Count;
             int nc = 0;
             for (int r = 0; r < nr; r++) if (rows[r].TokenType == TokenType.DataList) nc = Mathf.Max(nc, rows[r].DataList.Count);
-            nc = Mathf.Min(nc, Mathf.Min(frames.Length, Mathf.Max(0, maxCols)));
             if (nr == 0 || nc == 0) { displayedSource = source; displayedRevision = source.GetRevision(); return; }
             workRows = nr;
             workCols = nc;
@@ -542,7 +686,7 @@ namespace SheetBoard
                 {
                     int i = r * workCols + c;
                     workRaw[i] = Value(Cell(rows, r, c));
-                    int scanLength = Mathf.Min(workRaw[i].Length, MaxCellChars + 1);
+                    int scanLength = workRaw[i].Length;
                     for (int j = 0; j < scanLength; j++)
                     {
                         if (workRaw[i][j] <= 127) workAscii[i]++;
@@ -868,16 +1012,17 @@ namespace SheetBoard
 
         private int GetChipPoolIndex()
         {
-            if (chipTemplate == null || arrowTemplate == null || chipContainer == null || arrowContainer == null || chipPoolUnavailable || chipCount >= chips.Length)
+            if (chipTemplate == null || arrowTemplate == null || chipContainer == null || arrowContainer == null || chipPoolUnavailable)
             {
                 if (!warnedChipPool)
                 {
                     warnedChipPool = true;
-                    Debug.LogWarning("SheetBoardDisplay: chip pool unavailable. chipCount=" + chipCount + ", poolLength=" + chips.Length + ", check chip/arrow templates and capacity.");
+                    Debug.LogWarning("SheetBoardDisplay: chip pool unavailable. count=" + chipCreatedCount + ", check chip/arrow templates.");
                 }
                 chipPoolUnavailable = true;
                 return -1;
             }
+            EnsureChipCapacity(chipCount + 1);
             int index = chipCount;
             if (chips[index] == null)
             {
@@ -891,10 +1036,11 @@ namespace SheetBoard
                     if (!warnedChipPool)
                     {
                         warnedChipPool = true;
-                        Debug.LogWarning("SheetBoardDisplay: chip or arrow template has no Image.");
+                        Debug.LogWarning("SheetBoardDisplay: chip pool unavailable. count=" + chipCreatedCount + ", template has no Image.");
                     }
                     return -1;
                 }
+                chipCreatedCount++;
             }
             chipCount++;
             return index;
@@ -1040,6 +1186,7 @@ namespace SheetBoard
                     float cellInset = showGrid ? Mathf.Max(0f, gridWidth) : 0f;
                     DrawChip(i, workXs[c] + cellInset, workYs[r] + cellInset, width - 2f * cellInset, height - 2f * cellInset);
                     int kind = workSpanRows[i] > 0 ? 1 : (workWrapping[i] || workRaw[i].Contains("\n") || workRaw[i].Contains("\r") ? 2 : 0);
+                    if (workRaw[i].Length == 0) kind = 0;
                     if (kind == 0 && workChipKind[i] == 0 && workAlignment[i] == 0 && workRaw[i].Length > 0)
                     {
                         if (EmWidth(i) * workBasePx > workWs[c] - 2f * Padding)
@@ -1076,46 +1223,110 @@ namespace SheetBoard
 
         private void DrawColumns()
         {
-            bool sameHeight = true;
-            for (int r = 1; r < workRows; r++)
-            {
-                if (workHs[r] != workHs[0]) sameHeight = false;
-            }
             for (int c = 0; c < workCols; c++)
             {
-                Place(frames[c], workXs[c], 0f, workWs[c], workHeightAll);
-                TMP_Text column = columns[c];
-                if (column == null) continue;
-                column.color = bodyColor;
-                column.fontSize = workBasePx;
-                column.alignment = TextAlignmentOptions.TopLeft;
-                string content = "";
-                if (workRows > 0)
+                int first = 0;
+                while (first < workRows)
                 {
-                    float dummyOffset = workHs[0] * 0.5f - VerticalOffsetFactor * workBasePx;
-                    bool dummyShifted = Mathf.Abs(dummyOffset) >= 1f;
-                    content = "<line-height=0>";
-                    if (dummyShifted) content += "<voffset=" + Mathf.RoundToInt(-dummyOffset).ToString() + ">";
-                    content += "<alpha=#00>M</alpha>";
-                    if (dummyShifted) content += "</voffset>";
-                    content += "\n";
+                    int last = first;
+                    int glyphs = 0;
+                    while (last < workRows)
+                    {
+                        int rowGlyphs = EstimateCellGlyphs(workRaw[last * workCols + c]);
+                        if (last > first && glyphs + rowGlyphs > SegmentGlyphBudget) break;
+                        glyphs += rowGlyphs;
+                        last++;
+                        if (glyphs > SegmentGlyphBudget) break;
+                    }
+                    int index = GetSegmentPoolIndex();
+                    if (index < 0) return;
+                    segmentColumn[index] = c;
+                    segmentFirstRow[index] = first;
+                    segmentLastRow[index] = last - 1;
+                    float segmentHeight = 0f;
+                    for (int r = first; r < last; r++) segmentHeight += workHs[r];
+                    Place(segmentFrames[index], workXs[c], workYs[first], workWs[c], segmentHeight);
+                    TMP_Text column = segments[index];
+                    if (column != null)
+                    {
+                        column.color = bodyColor;
+                        column.fontSize = workBasePx;
+                        column.alignment = TextAlignmentOptions.TopLeft;
+                        string content = "";
+                        float dummyOffset = workHs[first] * 0.5f - VerticalOffsetFactor * workBasePx;
+                        bool dummyShifted = Mathf.Abs(dummyOffset) >= 1f;
+                        content = "<line-height=0>";
+                        if (dummyShifted) content += "<voffset=" + Mathf.RoundToInt(-dummyOffset).ToString() + ">";
+                        content += "<alpha=#00>M<alpha=#FF>";
+                        if (dummyShifted) content += "</voffset>";
+                        content += "\n";
+                        bool sameHeight = true;
+                        for (int r = first + 1; r < last; r++) if (workHs[r] != workHs[first]) sameHeight = false;
+                        for (int r = first; r < last; r++)
+                        {
+                            int i = r * workCols + c;
+                            if (r > first) content += "\n";
+                            if (!sameHeight || r == first) content += "<line-height=" + ((int)workHs[r]).ToString() + ">";
+                            content += "<align=" + (workAlignment[i] == 1 ? "center" : (workAlignment[i] == 2 ? "right" : "left")) + ">";
+                            float font = workBasePx * (workPt[i] > 0f && workBasePt > 0f ? FontFactor(workPt[i], workBasePt) : 1f);
+                            float offset = workHs[r] * 0.5f - VerticalOffsetFactor * workBasePx + GlyphCenterFactor * (font - workBasePx);
+                            bool shifted = Mathf.Abs(offset) >= 1f;
+                            if (shifted) content += "<voffset=" + Mathf.RoundToInt(-offset).ToString() + ">";
+                            if (!workCovered[i] && !workOverlayUsed[i]) content += StyledCell(i, workHeader && r == 0, false);
+                            if (shifted) content += "</voffset>";
+                        }
+                        column.text = content;
+                        segmentFrames[index].gameObject.SetActive(true);
+                    }
+                    first = last;
                 }
-                for (int r = 0; r < workRows; r++)
-                {
-                    int i = r * workCols + c;
-                    if (r > 0) content += "\n";
-                    if (!sameHeight || r == 0) content += "<line-height=" + ((int)workHs[r]).ToString() + ">";
-                    content += "<align=" + (workAlignment[i] == 1 ? "center" : (workAlignment[i] == 2 ? "right" : "left")) + ">";
-                    float font = workBasePx * (workPt[i] > 0f && workBasePt > 0f ? FontFactor(workPt[i], workBasePt) : 1f);
-                    float offset = workHs[r] * 0.5f - VerticalOffsetFactor * workBasePx + GlyphCenterFactor * (font - workBasePx);
-                    bool shifted = Mathf.Abs(offset) >= 1f;
-                    if (shifted) content += "<voffset=" + Mathf.RoundToInt(-offset).ToString() + ">";
-                    if (!workCovered[i] && !workOverlayUsed[i]) content += StyledCell(i, workHeader && r == 0, false);
-                    if (shifted) content += "</voffset>";
-                }
-                column.text = content;
-                frames[c].gameObject.SetActive(true);
             }
+        }
+
+        private int EstimateCellGlyphs(string value)
+        {
+            int count = 0;
+            for (int i = 0; i < value.Length; i++)
+            {
+                char valueChar = value[i];
+                bool whitespace = valueChar == ' ' || (valueChar >= '\t' && valueChar <= '\r') || valueChar == '\u0085' || valueChar == '\u00A0' || valueChar == '\u1680' || (valueChar >= '\u2000' && valueChar <= '\u200A') || valueChar == '\u2028' || valueChar == '\u2029' || valueChar == '\u202F' || valueChar == '\u205F' || valueChar == '\u3000';
+                if (!whitespace && !(valueChar >= 0xDC00 && valueChar <= 0xDFFF)) count++;
+            }
+            return count;
+        }
+
+        private int GetSegmentPoolIndex()
+        {
+            if (segmentPoolUnavailable || columnTemplate == null || tableArea == null)
+            {
+                if (!warnedSegmentPool) { warnedSegmentPool = true; Debug.LogWarning("SheetBoardDisplay: segment pool unavailable. count=" + segmentCreatedCount); }
+                segmentPoolUnavailable = true;
+                return -1;
+            }
+            EnsureTextCapacity(segmentCount + 1);
+            int index = segmentCount++;
+            if (segments[index] == null)
+            {
+                GameObject frame = Instantiate(columnTemplate.GetComponent<RectTransform>().parent.gameObject, tableArea);
+                segmentFrames[index] = (RectTransform)frame.transform;
+                segments[index] = frame.GetComponentInChildren<TMP_Text>(true);
+                if (segments[index] == null)
+                {
+                    Destroy(frame);
+                    segmentPoolUnavailable = true;
+                    if (!warnedSegmentPool) { warnedSegmentPool = true; Debug.LogWarning("SheetBoardDisplay: segment pool unavailable. count=" + segmentCreatedCount); }
+                    return -1;
+                }
+                segmentTextRects[index] = segments[index].GetComponent<RectTransform>();
+                segmentTextRects[index].anchorMin = Vector2.zero;
+                segmentTextRects[index].anchorMax = Vector2.one;
+                segmentTextRects[index].offsetMin = new Vector2(Padding, 0f);
+                segmentTextRects[index].offsetMax = new Vector2(-Padding, 0f);
+                segmentTextRects[index].gameObject.SetActive(true);
+                frame.SetActive(false);
+                segmentCreatedCount++;
+            }
+            return index;
         }
     }
 }

@@ -10,6 +10,7 @@ using VRC.Udon.Common.Interfaces;
 namespace SheetBoard
 {
     public enum SheetBoardAudience { Public = 0, Staff = 1, Admin = 2 }
+    public enum SheetBoardLanguage { Auto = 0, Japanese = 1, English = 2 }
 
     [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
     public class SheetBoardSource : UdonSharpBehaviour
@@ -23,6 +24,32 @@ namespace SheetBoard
         private const double SecondsPerMinute = 60d;
         private const double MinutesPerHour = 60d;
         private const double MinutesPerDay = 1440d;
+        private const string JapanesePermissionDeniedText = "閲覧権限がありません";
+        private const string EnglishPermissionDeniedText = "You don't have permission to view this.";
+        private const string JapanesePermissionWaitingText = "権限を確認中…";
+        private const string EnglishPermissionWaitingText = "Checking permission…";
+        private const string JapaneseUrlMissingText = "URLが設定されていません";
+        private const string EnglishUrlMissingText = "No URL is set.";
+        private const string JapaneseLoadingText = "読み込み中…";
+        private const string EnglishLoadingText = "Loading…";
+        private const string JapaneseWaitingNearText = "近づくと読み込みます";
+        private const string EnglishWaitingNearText = "Come closer to load.";
+        private const string JapaneseFailedText = "読み込めません・{s}秒後に再試行（{code}）";
+        private const string EnglishFailedText = "Couldn't load · retrying in {s}s ({code})";
+        private const string JapaneseFreshText = "更新 {time}（{ago}）";
+        private const string EnglishFreshText = "Updated {time} ({ago})";
+        private const string JapaneseStaleText = "更新 {time}（{ago}）・自動公開が止まっています";
+        private const string EnglishStaleText = "Updated {time} ({ago}) · auto-publish has stopped";
+        private const string JapaneseRetryText = "更新 {time}（{ago}）・再試行中";
+        private const string EnglishRetryText = "Updated {time} ({ago}) · retrying";
+        private const string JapaneseRefreshingSuffix = "・更新中…";
+        private const string EnglishRefreshingSuffix = " · updating…";
+        private const string JapaneseMinutesUnit = "分前";
+        private const string EnglishMinutesUnit = " min ago";
+        private const string JapaneseHoursUnit = "時間前";
+        private const string EnglishHoursUnit = " h ago";
+        private const string JapaneseDaysUnit = "日前";
+        private const string EnglishDaysUnit = " d ago";
 
         public VRCUrl[] urls;
         public string baseUrl = "";
@@ -32,21 +59,22 @@ namespace SheetBoard
         public float manualCooldown = 5f;
         public float startDelayMax = 3f;
         public SheetBoardAudience audience = SheetBoardAudience.Public;
+        public SheetBoardLanguage language = SheetBoardLanguage.Auto;
         public UdonBehaviour permissionController;
-        public string permissionDeniedText = "閲覧権限がありません";
-        public string permissionWaitingText = "権限を確認中…";
+        public string permissionDeniedText = "";
+        public string permissionWaitingText = "";
 
-        public string urlMissingText = "URLが設定されていません";
-        public string loadingText = "読み込み中…";
-        public string waitingNearText = "近づくと読み込みます";
-        public string failedText = "読み込めません・{s}秒後に再試行（{code}）";
-        public string freshText = "更新 {time}（{ago}）";
-        public string staleText = "更新 {time}（{ago}）・自動公開が止まっています";
-        public string retryText = "更新 {time}（{ago}）・再試行中";
-        public string refreshingSuffix = "・更新中…";
-        public string minutesUnit = "分前";
-        public string hoursUnit = "時間前";
-        public string daysUnit = "日前";
+        public string urlMissingText = "";
+        public string loadingText = "";
+        public string waitingNearText = "";
+        public string failedText = "";
+        public string freshText = "";
+        public string staleText = "";
+        public string retryText = "";
+        public string refreshingSuffix = "";
+        public string minutesUnit = "";
+        public string hoursUnit = "";
+        public string daysUnit = "";
 
         private DataDictionary ranges;
         private DataList rangeOrder;
@@ -80,9 +108,12 @@ namespace SheetBoard
         private float[] retiredAt;
         private int retiredUrlCount;
         private UdonBehaviour cachedPermissionSource;
+        private SheetBoardLanguage resolvedLanguage = SheetBoardLanguage.English;
+        private bool languageResolved;
 
         private void OnEnable()
         {
+            ResolveLanguage();
             float now = Time.realtimeSinceStartup;
             EvaluatePermission();
             if (!initialized)
@@ -106,6 +137,33 @@ namespace SheetBoard
                 SendCustomEventDelayedSeconds(nameof(_Tick), TickInterval);
             }
         }
+
+        public override void OnLanguageChanged(string language)
+        {
+            ResolveLanguage();
+            UpdateStatus();
+        }
+
+        private void ResolveLanguage()
+        {
+            if (language == SheetBoardLanguage.Japanese) { resolvedLanguage = SheetBoardLanguage.Japanese; languageResolved = true; return; }
+            if (language == SheetBoardLanguage.English) { resolvedLanguage = SheetBoardLanguage.English; languageResolved = true; return; }
+            string current = VRCPlayerApi.GetCurrentLanguage();
+            resolvedLanguage = !string.IsNullOrEmpty(current) && current.Length >= 2 && (current[0] == 'j' || current[0] == 'J') && (current[1] == 'a' || current[1] == 'A') ? SheetBoardLanguage.Japanese : SheetBoardLanguage.English;
+            languageResolved = true;
+        }
+
+        private string ResolveText(string value, string japanese, string english)
+        {
+            if (!languageResolved) ResolveLanguage();
+            if (string.IsNullOrEmpty(value)) return resolvedLanguage == SheetBoardLanguage.Japanese ? japanese : english;
+            if (value == japanese) return resolvedLanguage == SheetBoardLanguage.Japanese ? japanese : english;
+            return value;
+        }
+
+        public string GetPermissionDeniedText() { return ResolveText(permissionDeniedText, JapanesePermissionDeniedText, EnglishPermissionDeniedText); }
+        public string GetPermissionWaitingText() { return ResolveText(permissionWaitingText, JapanesePermissionWaitingText, EnglishPermissionWaitingText); }
+        public string GetRefreshingSuffix() { return ResolveText(refreshingSuffix, JapaneseRefreshingSuffix, EnglishRefreshingSuffix); }
 
         private void OnDisable()
         {
@@ -336,36 +394,36 @@ namespace SheetBoard
         private void UpdateStatus()
         {
             statusLevel = 2;
-            if (audience != SheetBoardAudience.Public && !permissionKnown) { statusText = permissionWaitingText; return; }
-            if (audience != SheetBoardAudience.Public && !permissionAllowed) { statusText = permissionDeniedText; return; }
-            if (validUrlCount == 0) { statusText = urlMissingText; return; }
-            if (inFlight && !hasSuccess) { statusText = loadingText; return; }
+            if (audience != SheetBoardAudience.Public && !permissionKnown) { statusText = GetPermissionWaitingText(); return; }
+            if (audience != SheetBoardAudience.Public && !permissionAllowed) { statusText = GetPermissionDeniedText(); return; }
+            if (validUrlCount == 0) { statusText = ResolveText(urlMissingText, JapaneseUrlMissingText, EnglishUrlMissingText); return; }
+            if (inFlight && !hasSuccess) { statusText = ResolveText(loadingText, JapaneseLoadingText, EnglishLoadingText); return; }
             if (!hasSuccess)
             {
                 if (failed)
                 {
                     int seconds = Mathf.CeilToInt(Mathf.Max(0f, nextFetchAt - Time.realtimeSinceStartup));
-                    statusText = failedText.Replace("{code}", errorCode).Replace("{s}", seconds.ToString());
+                    statusText = ResolveText(failedText, JapaneseFailedText, EnglishFailedText).Replace("{code}", errorCode).Replace("{s}", seconds.ToString());
                 }
-                else if (manualPending) statusText = loadingText;
-                else if (nearRadius > 0f && (!hasNear || Time.realtimeSinceStartup - lastNearAt > nearWindow)) statusText = waitingNearText;
-                else statusText = loadingText;
+                else if (manualPending) statusText = ResolveText(loadingText, JapaneseLoadingText, EnglishLoadingText);
+                else if (nearRadius > 0f && (!hasNear || Time.realtimeSinceStartup - lastNearAt > nearWindow)) statusText = ResolveText(waitingNearText, JapaneseWaitingNearText, EnglishWaitingNearText);
+                else statusText = ResolveText(loadingText, JapaneseLoadingText, EnglishLoadingText);
                 return;
             }
             DateTime now = Utilities.IsValid(Networking.LocalPlayer) ? Networking.GetNetworkDateTime() : DateTime.UtcNow;
             DateTime epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             double nowUnix = (now - epoch).TotalSeconds;
             double minutes = Math.Max(0d, nowUnix - updatedUnix) / SecondsPerMinute;
-            string elapsed = ((int)minutes).ToString() + minutesUnit;
-            if (minutes >= MinutesPerDay) elapsed = ((int)(minutes / MinutesPerDay)).ToString() + daysUnit;
-            else if (minutes >= MinutesPerHour) elapsed = ((int)(minutes / MinutesPerHour)).ToString() + hoursUnit;
+            string elapsed = ((int)minutes).ToString() + ResolveText(minutesUnit, JapaneseMinutesUnit, EnglishMinutesUnit);
+            if (minutes >= MinutesPerDay) elapsed = ((int)(minutes / MinutesPerDay)).ToString() + ResolveText(daysUnit, JapaneseDaysUnit, EnglishDaysUnit);
+            else if (minutes >= MinutesPerHour) elapsed = ((int)(minutes / MinutesPerHour)).ToString() + ResolveText(hoursUnit, JapaneseHoursUnit, EnglishHoursUnit);
             bool stale = aliveUnix > 0d && (nowUnix - aliveUnix) / SecondsPerMinute > staleMinutes;
             statusLevel = failed || stale ? 1 : 0;
-            string template = failed ? retryText : (stale ? staleText : freshText);
+            string template = failed ? ResolveText(retryText, JapaneseRetryText, EnglishRetryText) : (stale ? ResolveText(staleText, JapaneseStaleText, EnglishStaleText) : ResolveText(freshText, JapaneseFreshText, EnglishFreshText));
             DateTime localTime = epoch.AddSeconds(updatedUnix).ToLocalTime();
             string time = localTime.Hour.ToString("00") + ":" + localTime.Minute.ToString("00");
             statusText = template.Replace("{time}", time).Replace("{ago}", elapsed);
-            if (IsBusy()) statusText += refreshingSuffix;
+            if (IsBusy()) statusText += ResolveText(refreshingSuffix, JapaneseRefreshingSuffix, EnglishRefreshingSuffix);
         }
 
         public string GetStatusText() { return statusText; }

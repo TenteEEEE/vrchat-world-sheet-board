@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using SheetBoard;
 using UdonSharpEditor;
@@ -19,29 +20,68 @@ namespace SheetBoardEditor
         public void OnProcessScene(Scene scene, BuildReport report)
         {
             GameObject[] roots = scene.GetRootGameObjects();
-            const string urlWarning = "SheetBoard: baseUrl と生成済み URL が一致しません。URL を適用してから公開してください。";
+            List<string> errors = new List<string>();
+            List<SheetBoardSource> errorSources = new List<SheetBoardSource>();
             for (int i = 0; i < roots.Length; i++)
             {
                 SheetBoardSource[] sources = roots[i].GetComponentsInChildren<SheetBoardSource>(true);
                 for (int j = 0; j < sources.Length; j++)
                 {
-                    ValidateSource(sources[j], report);
-                    if (sources[j] != null && !string.IsNullOrWhiteSpace(sources[j].baseUrl) && !SheetBoardSourceEditor.UrlsMatch(sources[j]))
-                        Debug.LogWarning(urlWarning, sources[j]);
+                    SheetBoardSource source = sources[j];
+                    if (source == null || !source.gameObject.activeInHierarchy || !source.enabled) continue;
+
+                    string sourceName = source.gameObject.name;
+                    bool hasError = false;
+                    if (!HasValidUrl(source))
+                    {
+                        errors.Add("SheetBoard: Source「" + sourceName + "」に URL が設定されていません。Inspector で公開URLを貼り、「URL を適用」を押してください。");
+                        hasError = true;
+                    }
+                    if (!string.IsNullOrWhiteSpace(source.baseUrl) && !SheetBoardSourceEditor.UrlsMatch(source))
+                    {
+                        errors.Add("SheetBoard: Source「" + sourceName + "」の公開URLが適用されていません。Inspector の「URL を適用」を押してから公開してください。");
+                        hasError = true;
+                    }
+
+                    string permissionError = ValidateSource(source);
+                    if (permissionError != null)
+                    {
+                        errors.Add("SheetBoard: Source「" + sourceName + "」" + permissionError);
+                        hasError = true;
+                    }
+                    if (hasError) errorSources.Add(source);
+                }
+
+                SheetBoardDisplay[] displays = roots[i].GetComponentsInChildren<SheetBoardDisplay>(true);
+                for (int j = 0; j < displays.Length; j++)
+                {
+                    SheetBoardDisplay display = displays[j];
+                    if (display == null || !display.gameObject.activeInHierarchy || !display.enabled || display.source != null) continue;
+                    Debug.LogWarning("SheetBoard: Display「" + display.gameObject.name + "」の Source が設定されていません。", display);
                 }
             }
+
+            if (errors.Count == 0) return;
+            string message = string.Join("\n", errors.ToArray());
+            if (report != null) throw new BuildFailedException(message);
+            Debug.LogError(message, errorSources[0]);
         }
 
-        private static void ValidateSource(SheetBoardSource source, BuildReport report)
+        private static bool HasValidUrl(SheetBoardSource source)
         {
-            if (source == null || source.audience == SheetBoardAudience.Public) return;
+            if (source.urls == null) return false;
+            for (int i = 0; i < source.urls.Length; i++)
+                if (source.urls[i] != null && !string.IsNullOrEmpty(source.urls[i].Get())) return true;
+            return false;
+        }
+
+        private static string ValidateSource(SheetBoardSource source)
+        {
+            if (source == null || source.audience == SheetBoardAudience.Public) return null;
             UdonBehaviour controller = source.permissionController;
             if (!IsValidController(source, controller))
-            {
-                const string message = "SheetBoard: 制限付き Source に同じシーンの有効な対応版 PermissionController がありません。";
-                if (report != null) throw new BuildFailedException(message);
-                Debug.LogError(message, source);
-            }
+                return "は制限付きで、同じシーンの有効な対応版 PermissionController がありません。";
+            return null;
         }
 
         internal static bool IsValidController(SheetBoardSource source, UdonBehaviour controller)
