@@ -11,15 +11,15 @@ namespace SheetBoard
     public class SheetBoardDisplay : UdonSharpBehaviour
     {
         private const string JapaneseRangeMissingText = "範囲「{name}」が見つかりません";
-        private const string EnglishRangeMissingText = "Range \"{name}\" was not found.";
-        private const string JapaneseSourceMissingText = "Sourceが設定されていません";
-        private const string EnglishSourceMissingText = "No Source is set.";
+        private const string EnglishRangeMissingText = "Range \"{name}\" was not found";
+        private const string JapaneseSourceMissingText = "データ元が設定されていません";
+        private const string EnglishSourceMissingText = "No data source is set";
+        private const float MinReadableRowHeight = 12f;
         private const string JapaneseRefreshIdleText = "更新";
         private const string EnglishRefreshIdleText = "Refresh";
 
         [Header("Settings")]
         public SheetBoardSource source;
-        public SheetBoardLanguage language = SheetBoardLanguage.Auto;
         public string rangeName = "";
         public bool showTitle = true;
         public bool zebra = false;
@@ -124,11 +124,11 @@ namespace SheetBoard
         private SheetBoardLanguage resolvedLanguage = SheetBoardLanguage.English;
         private bool languageResolved;
         private bool rangeMissingShown;
+        private bool tableTooLarge;
 
         private void ResolveLanguage()
         {
-            if (language == SheetBoardLanguage.Japanese) { resolvedLanguage = SheetBoardLanguage.Japanese; languageResolved = true; return; }
-            if (language == SheetBoardLanguage.English) { resolvedLanguage = SheetBoardLanguage.English; languageResolved = true; return; }
+            if (source != null) { resolvedLanguage = source.GetResolvedLanguage(); languageResolved = true; return; }
             string current = VRCPlayerApi.GetCurrentLanguage();
             resolvedLanguage = !string.IsNullOrEmpty(current) && current.Length >= 2 && (current[0] == 'j' || current[0] == 'J') && (current[1] == 'a' || current[1] == 'A') ? SheetBoardLanguage.Japanese : SheetBoardLanguage.English;
             languageResolved = true;
@@ -138,13 +138,19 @@ namespace SheetBoard
         {
             if (!languageResolved) ResolveLanguage();
             if (string.IsNullOrEmpty(value)) return resolvedLanguage == SheetBoardLanguage.Japanese ? japanese : english;
-            if (value == japanese) return resolvedLanguage == SheetBoardLanguage.Japanese ? japanese : english;
+            if (value == japanese || value == "Sourceが設定されていません" || value == "No Source is set." || value == "Range \"{name}\" was not found.") return resolvedLanguage == SheetBoardLanguage.Japanese ? japanese : english;
             return value;
         }
 
         private string GetRangeMissingText() { return ResolveText(rangeMissingText, JapaneseRangeMissingText, EnglishRangeMissingText); }
         private string GetSourceMissingText() { return ResolveText(sourceMissingText, JapaneseSourceMissingText, EnglishSourceMissingText); }
         private string GetRefreshIdleText() { return ResolveText(refreshIdleText, JapaneseRefreshIdleText, EnglishRefreshIdleText); }
+        private string GetMissingRangeMessage()
+        {
+            if (source != null && source.HasNoRanges()) return resolvedLanguage == SheetBoardLanguage.Japanese ? "表示する範囲がまだありません" : "No range has been published yet";
+            string name = string.IsNullOrEmpty(rangeName) ? source.GetFirstRangeName() : rangeName;
+            return GetRangeMissingText().Replace("{name}", name);
+        }
 
         private void InitColors()
         {
@@ -234,7 +240,7 @@ namespace SheetBoard
             else if (access != 0)
             {
                 if (displayedSource != source || displayedRevision != source.GetRevision()) RenderNow();
-                SetStatus(access == 2 ? source.GetPermissionDeniedText() : source.GetPermissionWaitingText(), errorColor);
+                SetStatus(access == 2 ? source.GetPermissionDeniedText() : source.GetPermissionWaitingText(), access == 2 ? errorColor : busyColor);
             }
             else
             {
@@ -243,9 +249,13 @@ namespace SheetBoard
                 if (source.nearRadius > 0f && Utilities.IsValid(player) && Vector3.Distance(player.GetPosition(), transform.position) <= source.nearRadius) source._ReportNear(interval);
                 if (displayedSource != source || displayedRevision != source.GetRevision()) RenderNow();
                 int level = source.GetStatusLevel();
-                SetStatus(source.GetStatusText(), level == 0 ? normalColor : (level == 1 ? staleColor : errorColor));
+                string message = source.GetStatusText();
+                Color color = level == 0 ? normalColor : (level == 1 ? staleColor : (level == 3 ? busyColor : errorColor));
+                if (rangeMissingShown && level != 2 && level != 3) { message = GetMissingRangeMessage(); color = errorColor; }
+                if (tableTooLarge) { message += resolvedLanguage == SheetBoardLanguage.Japanese ? "・表が大きく文字が小さくなっています" : " · table is too large to read comfortably"; if (level != 2 && !rangeMissingShown) color = staleColor; }
+                SetStatus(message, color);
             }
-            if (busy)
+            if (busy && !tableTooLarge && !rangeMissingShown)
             {
                 busyLampOn = !busyLampOn;
                 Color color = busyColor;
@@ -609,6 +619,7 @@ namespace SheetBoard
         public void RenderNow()
         {
             rangeMissingShown = false;
+            tableTooLarge = false;
             displayedSource = null; displayedRevision = -1;
             workRows = 0; workCols = 0;
             InitColors();
@@ -630,7 +641,7 @@ namespace SheetBoard
             if (!source.HasData()) { displayedSource = source; displayedRevision = source.GetRevision(); return; }
             string name = string.IsNullOrEmpty(rangeName) ? source.GetFirstRangeName() : rangeName;
             DataDictionary range = source.GetRange(name);
-            if (range == null) { if (titleText != null) titleText.text = GetRangeMissingText().Replace("{name}", name); rangeMissingShown = true; displayedSource = source; displayedRevision = source.GetRevision(); return; }
+            if (range == null) { if (titleText != null) titleText.text = GetMissingRangeMessage(); rangeMissingShown = true; displayedSource = source; displayedRevision = source.GetRevision(); return; }
             DataToken token;
             if (titleText != null) titleText.text = showTitle && range.TryGetValue("title", out token) && token.TokenType == TokenType.String ? Clean(Value(token), false) : "";
             bool header = range.TryGetValue("header", out token) && token.TokenType == TokenType.Boolean && token.Boolean;
@@ -783,12 +794,14 @@ namespace SheetBoard
             float cumulative = 0f;
             for (int r = 0; r < workRows; r++)
             {
-                workYs[r] = Mathf.Round(cumulative);
-                cumulative += workHs[r] * scale;
-                workHs[r] = Mathf.Round(cumulative) - workYs[r];
+                float exact = workHs[r] * scale;
+                if (exact < MinReadableRowHeight) tableTooLarge = true;
+                workYs[r] = r == 0 ? 0f : Mathf.Max(Mathf.Round(cumulative), workYs[r - 1] + workHs[r - 1]);
+                cumulative += exact;
+                workHs[r] = Mathf.Max(1f, Mathf.Round(cumulative) - workYs[r]);
                 sorted[r] = workHs[r];
             }
-            workHeightAll = Mathf.Round(cumulative);
+            workHeightAll = workYs[workRows - 1] + workHs[workRows - 1];
             float medianHeight = Median(sorted, workRows, 0f);
             float preferred = sizes != null && rowh != null && workBasePt > 0f ? workBasePt * (4f / 3f) * scale * Mathf.Clamp(textScale, 0.5f, 3f) : medianHeight * DefaultCellHeightFactor * Mathf.Clamp(textScale, 0.5f, 3f) / DefaultTextScale;
             float rowLimit = RowFitRatio * medianHeight;
@@ -812,7 +825,7 @@ namespace SheetBoard
                         while (end < workCols)
                         {
                             int right = r * workCols + end;
-                            if (workRaw[right] != "" || workHasBg[right] || workCovered[right] || workSpanRows[right] > 0) break;
+                            if (workRaw[right] != "" || workHasBg[right] || workCovered[right] || workSpanRows[right] > 0 || workChipKind[right] != 0) break;
                             end++;
                         }
                         if (end == workCols)
@@ -1192,7 +1205,7 @@ namespace SheetBoard
                         if (EmWidth(i) * workBasePx > workWs[c] - 2f * Padding)
                         {
                             int end = c + 1;
-                            while (end < workCols && workRaw[r * workCols + end] == "" && !workHasBg[r * workCols + end] && !workCovered[r * workCols + end] && workSpanRows[r * workCols + end] == 0) end++;
+                            while (end < workCols && workRaw[r * workCols + end] == "" && !workHasBg[r * workCols + end] && !workCovered[r * workCols + end] && workSpanRows[r * workCols + end] == 0 && workChipKind[r * workCols + end] == 0) end++;
                             if (end > c + 1)
                             {
                                 kind = 3;

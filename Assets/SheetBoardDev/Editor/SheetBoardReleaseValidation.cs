@@ -40,7 +40,7 @@ namespace SheetBoardDevEditor
                 Set(source, "failed", false);
                 Set(source, "aliveUnix", (double)(now - 7200));
                 Status(source);
-                Require(source.GetStatusLevel() == 1 && source.GetStatusText().Contains("止まっています"), "Stale status disappeared during fetch");
+                Require(source.GetStatusLevel() == 1 && source.GetStatusText().Contains("更新が止まっている可能性があります"), "Stale status disappeared during fetch");
                 Debug.Log("[SheetBoard] Release regression OK: timestamp limits, CDN rollback, preserved data, in-flight status.");
                 SheetBoardDev.SheetBoardPreview.RenderSampleBatch();
             }

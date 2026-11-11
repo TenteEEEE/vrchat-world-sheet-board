@@ -57,11 +57,11 @@ public VRCUrl[] urls;                  // エディター（§7.2）が baseUrl 
 public string baseUrl = "";            // 運用者が貼る URL。実行時は使わない
 public float refreshInterval = 60f;    // 秒。実効値は max(30, この値)
 public float nearRadius = 0f;          // メートル。0 = 距離に関係なく更新する
-public float staleMinutes = 90f;       // 生存通知がこの時間途絶えたら「止まっています」
-public float manualCooldown = 5f;      // 手動更新のクールダウン（秒、既定 5）
-public float startDelayMax = 3f;       // 初回取得をランダムに遅らせる上限（秒）
+private const float StaleMinutes = 90f;       // 生存通知がこの時間途絶えたら「止まっています」
+private const float ManualCooldown = 5f;      // 手動更新のクールダウン（秒、既定 5）
+private const float StartDelayMax = 3f;       // 初回取得をランダムに遅らせる上限（秒）
 // 状態行の文言（§3.6）
-public SheetBoardAudience audience = SheetBoardAudience.Public; // 全員 / 協力者以上 / 管理者のみ
+public SheetBoardAudience audience = SheetBoardAudience.Public; // 全員 / ワールドスタッフ以上 / ワールド管理者のみ
 public SheetBoardLanguage language = SheetBoardLanguage.Auto; // Auto / Japanese / English
 public UdonBehaviour permissionController; // 制限付き閲覧で使う PermissionController
 // 以下の文言フィールドは空欄が既定。§3.6 の表示言語別文言で補う
@@ -78,7 +78,7 @@ Source Inspector では表示言語を `Auto` / `Japanese` / `English` から選
 時間はすべて `Time.realtimeSinceStartup`（以下 now）。`SendCustomEventDelayedSeconds` で 1 秒ごとの `_Tick` を回す（`Update` は使わない）。
 
 - **ループの維持**: 遅延イベントは引数を持てないので、次の予定時刻 `nextTickAt` で重複ループを止める。`_Tick` は `now < nextTickAt − 0.5 × 周期` なら何もせずに終わり（重複した古いループが消える）、それ以外は `nextTickAt = now + 周期` として再スケジュールしてから処理する。許容幅を持たせるのは、遅延イベントが予定よりわずかに早く発火してもループが止まらないようにするため。`OnEnable` では、ループが止まっているとき（`now > nextTickAt + 2 × 周期`、または未開始）だけ新しくスケジュールする。世代番号は使わない。
-- **初回**: 最初の有効化で `nextFetchAt = now + Random(0, startDelayMax)`、URL の添字を `Random(0, urls.Length)` から始める。
+- **初回**: 最初の有効化で `nextFetchAt = now + Random(0, StartDelayMax)`、URL の添字を `Random(0, urls.Length)` から始める。
 - **成功**: `nextFetchAt = now + max(30, refreshInterval) × Random(1.0, 1.1)`。
 - **失敗**（読み込みエラー、または JSON が §5 として不正）: `failCount` を増やし、`min(30 × 2^(failCount−1), 300)` 秒 × Random(0.8, 1.2) 後に再試行。成功で `failCount = 0`。
 - **近接条件**: `nearRadius > 0` のとき、直近 `max(2, 2 × 報告された nearCheckInterval)` 秒以内に Display から `_ReportNear()` が無ければ取得しない。近づいた時点で `nextFetchAt` を過ぎていれば、その `_Tick` で取得する。
@@ -88,7 +88,7 @@ Source Inspector では表示言語を `Auto` / `Japanese` / `English` から選
 
 ### 3.3 手動更新
 
-`public void RequestRefresh()`: ローカルのみ。有効な URL が無い、権限が無い、取得中、前回の受付から `manualCooldown` 秒未満なら無視。受け付けたら近接条件とバックオフを無視して次の `_Tick` で取得し、状態行を再計算する。
+`public void RequestRefresh()`: ローカルのみ。有効な URL が無い、権限が無い、取得中、前回の受付から `ManualCooldown` 秒未満なら無視。受け付けたら近接条件とバックオフを無視して次の `_Tick` で取得し、状態行を再計算する。
 
 `public float GetRefreshWaitSeconds()`: 権限なし・有効な URL なし・取得中は `-1`。手動更新のクールダウン中は残り秒数、受付可能なら `0`。
 
@@ -119,7 +119,7 @@ public bool HasData();                         // 一度でも取得に成功し
 public DataDictionary GetRange(string name);   // 無ければ null
 public string GetFirstRangeName();             // order の先頭、無ければ ranges の最初のキー。無ければ ""
 public string GetStatusText();                 // キャッシュ済みの文字列を返すだけ
-public int GetStatusLevel();                   // 0 = 正常, 1 = 止まっている/再試行中, 2 = エラー/未取得
+public int GetStatusLevel();                   // 0 = 正常, 1 = 止まっている/再試行中, 2 = エラー/未取得, 3 = 準備中
 public void _ReportNear(float checkInterval);  // Display から
 public void RequestRefresh();
 public bool IsBusy();                          // 権限と有効な URL があり、取得中または手動更新待ち
@@ -129,31 +129,37 @@ public bool ApplyJson(string json);
 
 状態行の文字列とレベルは **`_Tick` で 1 秒に 1 回だけ計算してキャッシュ**する（Display が何枚あっても計算は 1 回）。`ApplyJson` の直後にも再計算する。
 
+状態レベルは 0 = 正常、1 = 注意（再試行中・自動公開停止）、2 = エラー（閲覧権限なし・URL 未設定・一度も読み込めずに失敗）、3 = 準備中（権限確認中・読み込み中・近づくと読み込みます）とする。レベル 3 のランプは Display の `busyColor` を使う。
+
 ### 3.6 状態行
 
 | 状況 | level | 日本語の既定文言 | 英語の既定文言 |
 | --- | --- | --- | --- |
-| 閲覧権限なし | — | `閲覧権限がありません` | `You don't have permission to view this.` |
-| 権限確認中 | — | `権限を確認中…` | `Checking permission…` |
-| URL 未設定 | 2 | `URLが設定されていません` | `No URL is set.` |
-| 初回取得前・初回取得中 | 2 | `読み込み中…` | `Loading…` |
-| 近接待ちで一度も取得していない | 2 | `近づくと読み込みます` | `Come closer to load.` |
-| 一度も成功せずに失敗（再試行待ち） | 2 | `読み込めません・{s}秒後に再試行（{code}）` | `Couldn't load · retrying in {s}s ({code})` |
+| 閲覧権限なし | 2 | `閲覧権限がありません` | `You don't have permission to view this` |
+| 権限確認中 | 3 | `権限を確認中…` | `Checking permission…` |
+| URL 未設定 | 2 | `URLが設定されていません` | `No URL is set` |
+| 初回取得中（まだ読み込みに失敗していない） | 3 | `読み込み中…` | `Loading…` |
+| 近接待ちで一度も取得していない | 3 | `近づくと読み込みます` | `Come closer to load` |
+| 一度も読み込めずに失敗（再試行待ち） | 2 | `読み込めません・{s}秒後に再試行（{code}）` | `Couldn't load · retrying in {s}s ({code})` |
 | 成功・正常 | 0 | `更新 {time}（{ago}）` | `Updated {time} ({ago})` |
-| 成功・生存通知が `staleMinutes` 超過 | 1 | `更新 {time}（{ago}）・自動公開が止まっています` | `Updated {time} ({ago}) · auto-publish has stopped` |
+| 成功・生存通知が `StaleMinutes` 超過 | 1 | `更新 {time}（{ago}）・更新が止まっている可能性があります` | `Updated {time} ({ago}) · may be out of date` |
 | 成功済みで直近が失敗 | 1 | `更新 {time}（{ago}）・再試行中` | `Updated {time} ({ago}) · retrying` |
 | 成功済みの状態行に付く更新中表示 | — | `・更新中…` | ` · updating…` |
+| 経過時間（1分未満） | — | `たった今` | `just now` |
+| エラーの種類 | — | `時間切れ` / `データの形式が不正` / `HTTP nnn` | `timed out` / `invalid data` / `HTTP nnn` |
+| 公開範囲0件 | — | `表示する範囲がまだありません` | `No range has been published yet` |
+| 大きい表 | — | `・表が大きく文字が小さくなっています` | ` · table is too large to read comfortably` |
 | 経過時間（分） | — | `分前` | ` min ago` |
 | 経過時間（時間） | — | `時間前` | ` h ago` |
 | 経過時間（日） | — | `日前` | ` d ago` |
-| 範囲なし（Display） | — | `範囲「{name}」が見つかりません` | `Range "{name}" was not found.` |
-| Source 未設定（Display） | — | `Sourceが設定されていません` | `No Source is set.` |
+| 範囲なし（Display） | — | `範囲「{name}」が見つかりません` | `Range "{name}" was not found` |
+| Source 未設定（Display） | — | `データ元が設定されていません` | `No data source is set` |
 | 更新ボタン（Display） | — | `更新` | `Refresh` |
 
-- 「止まっています」の判定は `aliveUnix > 0 かつ 現在 − aliveUnix > staleMinutes`。`aliveUnix` が 0（旧形式）のときは判定しない。
+- 「止まっています」の判定は `aliveUnix > 0 かつ 現在 − aliveUnix > StaleMinutes`。`aliveUnix` が 0（旧形式）のときは判定しない。
 - `{time}` は `updatedUnix`（内容が最後に変わった時刻）を**閲覧者の現地時刻**にした `HH:mm`。`Hour.ToString("00") + ":" + Minute.ToString("00")` で組む（書式文字列の `:` はカルチャ依存のため）。
-- `{ago}` は現在と `updatedUnix` の差。60 分未満は `n + minutesUnit`、24 時間未満は `h + hoursUnit`、それ以上は `d + daysUnit`。現在時刻はローカルプレイヤーが有効なら `Networking.GetNetworkDateTime()`、そうでなければ `DateTime.UtcNow`。
-- 一度も成功していない間の取得中は `{s}` を出さず `loadingText`（level 2）。初回成功前に手動更新待ちの場合も `loadingText` を出す。
+- `{ago}` は現在と `updatedUnix` の差。1 分未満は `たった今` / `just now`、60 分未満は `n + minutesUnit`、24 時間未満は `h + hoursUnit`、それ以上は `d + daysUnit`。現在時刻はローカルプレイヤーが有効なら `Networking.GetNetworkDateTime()`、そうでなければ `DateTime.UtcNow`。
+- 一度も成功していない間の取得中は `{s}` を出さず `loadingText`（level 3）。初回成功前に手動更新待ちの場合も `loadingText` を出す。
 - 成功済みの取得中は level を変えず、直前の状態行の末尾に `refreshingSuffix` を追加する（定期取得のたびに赤くしない）。
 - 文字列の組み立てに `string.Format` / 補間は使わず、`+` と `Replace` を使う。
 
@@ -165,7 +171,6 @@ public bool ApplyJson(string json);
 
 ```csharp
 public SheetBoardSource source;
-public SheetBoardLanguage language = SheetBoardLanguage.Auto; // Auto / Japanese / English
 public string rangeName = "";          // 空なら最初の範囲（§4.6）
 public bool lightTheme = true;
 public bool showTitle = true;
@@ -195,7 +200,7 @@ public TMP_Text refreshLabel;
 ```
 
 TMP 参照は `TMP_Text` 型にする（`TextMeshProUGUI.fontSize` の setter は Udon 非公開）。
-Source の 13 個と Display の 3 個、合計 16 個の文言フィールドは上書き用。Display Inspector では `language` と `rangeMissingText`、`sourceMissingText`、`refreshIdleText` を編集できる。16 個の各フィールドは、空欄または従来の日本語既定値と完全一致する場合に表示言語の既定文言を使い、それ以外は入力値を使う。
+Source の 13 個と Display の 3 個、合計 16 個の文言フィールドは上書き用。Display Inspector では `rangeMissingText`、`sourceMissingText`、`refreshIdleText` を編集できる。16 個の各フィールドは、空欄または従来の日本語既定値と完全一致する場合に表示言語の既定文言を使い、それ以外は入力値を使う。
 
 | 色 | ライト（既定） | ダーク |
 | --- | --- | --- |
@@ -400,10 +405,10 @@ Apps Script が出力し、Source が読む。UTF-8。
 
 | 項目 | 動作 | 誰が使うか |
 | --- | --- | --- |
-| はじめにセットアップ | §6.4 のウィザード。セットアップ済みで実行者に連携情報が無ければ、GitHub 接続の前に確認画面を出す | 管理者 |
+| セットアップ・修復 | §6.4 のウィザード。セットアップ済みで実行者に連携情報が無ければ、GitHub 接続の前に確認画面を出す | 管理者 |
 | 選択範囲を掲示板に追加 | 選択中の表を設定タブへ追加（`addSelectionToBoard()`） | 誰でも |
-| 今すぐ公開 | 実行者がトークンを持っていれば強制公開。持っていなければ公開せず、保留フラグを立てて「次の自動確認（最大 5 分）で公開されます」と表示 | 誰でも |
-| 状態とURLを表示 | DocumentProperties の URL・最終公開・直近のエラー・警告を表示 | 誰でも |
+| 今すぐ公開 | 実行者がトークンを持っていれば強制公開。持っていなければ公開せず、保留フラグを立てて「受け付けました。数分以内に自動で公開されます。操作は不要です。」と表示 | 誰でも |
+| 状態とURLを表示 | DocumentProperties の URL・最終公開・状態ブロック・警告を表示。エラーは状態ブロックで案内する | 誰でも |
 | 管理者用 → GitHub連携をやり直す | トークンを取り直し、トリガーが無ければ設置し直す | 管理者 |
 | 管理者用 → 公開先を作り直す | §6.5 の管理者交代用。理解チェック後、新しい Gist（新しい URL）を作る | 管理者 |
 | 管理者用 → 連携を解除 | 自分のトリガーと SheetBoard の認証情報を削除（Gist は消さない） | 管理者 |
@@ -411,7 +416,10 @@ Apps Script が出力し、Source が読む。UTF-8。
 トークンを持たない実行者が公開処理を起こしても、共有のエラー状態・メール抑止には一切書き込まない。
 「公開先を作り直す」は、旧 URL の掲示板が更新されなくなり再アップロードが必要なこと、管理者交代時だけ使うことを説明する。利用者が「上の内容を理解しました」にチェックするまで実行ボタンを無効にする。
 
-セットアップ済みのシートで管理者以外が「はじめにセットアップ」を押した場合は、現在の所有者と「スタッフの方は操作不要です。シートを編集するだけで掲示板に反映されます」を表示する。［閉じる］と［管理者を引き継ぐので続ける］を出し、後者を選んだときだけ連携フローを始める。
+セットアップ済みのシートで管理者以外が「セットアップ・修復」を押した場合は、現在の所有者と「スタッフの方は操作不要です。シートを編集するだけで掲示板に反映されます」を表示する。［閉じる］と［管理者を引き継ぐので続ける］を出し、後者を選んだときだけ連携フローを始める。
+
+- セットアップ前の追加・公開操作では「まだセットアップされていません。管理者が SheetBoard → セットアップ・修復 を実行すると公開されます。」と案内する。
+- 範囲 0 件の確認で「いいえ」の場合は「公開を取りやめました。掲示板は変わっていません。」と表示する。連携解除後にスタッフが公開すると「管理者がGitHub連携を解除したため、自動公開は止まっています。新しい管理者が SheetBoard → セットアップ・修復 を実行してください。」と表示する。
 
 ### 6.3 設定タブ「SheetBoard設定」
 
@@ -441,7 +449,7 @@ Apps Script が出力し、Source が読む。UTF-8。
 - J1:J4 は順に `SheetBoard の状態`、`overallStatus_()` のアイコンと文言、次にすること（無ければ空欄）、更新時刻。J4 は `updatedUnix` をシートのタイムゾーンで `掲示板の内容の更新: yyyy/MM/dd HH:mm` と表示する。未公開なら `まだ公開していません`。定期確認時刻は書かない。
 - 状態書き込みは `writeSheetStatus_()` に集約し、H 列と J1:J4 だけを対象にする。H1 が空なら `状態` を書く。現在値と違う場合だけ更新し、保護や権限による失敗は無視して公開を失敗させない。公開成功・失敗・内容変更なしの早期終了、`setPending_()`、`finishSetup`、`disconnectConfirmed`、`addSelectionToBoard()` から呼ぶ。トークンが無い `publish_` の早期終了では呼ばない。`onEditInstalled(e)` と `onChangeInstalled(e)` は、設定タブの H 列以降の編集を無視する。イベント引数や `e.range` が無い場合は従来どおり処理する。
 - 公開に成功した範囲名は UTF-8 で 8 KB 以内の `publishedNames`（JSON 配列）として DocumentProperties に保存する。保存量を超える場合は一部を省き、状態画面に省いた件数を表示する。
-- 設定タブを新規作成するときだけ、1 行目を固定し、A1:G1 に各列の書き方と例をメモとして付け、H 列を約 300 px、J 列を約 420 px にする。既存シートの書式は変更しない。
+- 設定タブを新規作成するときだけ、1 行目を固定し、A1:G1 に各列の書き方と例をメモとして付け、H 列を約 300 px、J 列を約 420 px にする。F・G 列（列幅の比・配置）は列グループにして折りたたむ。既存シートの書式は変更しない。
 
 #### 6.3.1 全体の状態 `overallStatus_()`
 
@@ -449,29 +457,37 @@ Apps Script が出力し、Source が読む。UTF-8。
 
 | 条件 | level / icon | 文言 | 次にすること |
 | --- | --- | --- | --- |
-| `gistId` と `worldUrl` が両方ない | `none` / `○` | まだセットアップされていません | 管理者がメニュー「SheetBoard → はじめにセットアップ」を実行してください |
-| `lastPublishOutcome == 'reauth_required'` | `error` / `⚠` | GitHub連携の期限が切れたため、公開が止まっています | 管理者がメニュー「SheetBoard → 管理者用 → GitHub連携をやり直す」を実行してください（URLは変わりません） |
+| `gistId` と `worldUrl` が両方ない | `none` / `○` | まだセットアップされていません | 管理者がメニュー「SheetBoard → セットアップ・修復」を実行してください |
+| `lastPublishOutcome == 'disconnected'` | `warn` / `⏸` | 管理者がGitHub連携を解除したため、自動公開は止まっています | 新しい管理者が SheetBoard → セットアップ・修復 を実行してください |
+| `lastPublishOutcome == 'reauth_required'` | `error` / `⚠` | GitHub連携の期限が切れたため、公開が止まっています | 管理者がメニュー「SheetBoard → セットアップ・修復」を実行してください（URLは変わりません） |
 | `lastPublishStatus == 'failure'` | `error` / `⚠` | 公開できませんでした: 直近のエラー文（時刻を除く） | エラー文に応じて行動を案内。不明なら状態と URL を確認する |
-| 最終公開から 90 分超 | `warn` / `⚠` | 自動公開が止まっているようです | 管理者がメニュー「SheetBoard → はじめにセットアップ」をもう一度実行してください |
+| 最終公開から 90 分超 | `warn` / `⚠` | 自動公開が止まっているようです | 管理者がメニュー「SheetBoard → セットアップ・修復」をもう一度実行してください |
 | `publishedNames` が空 | `warn` / `⚠` | 掲示板に出す範囲がありません | 設定タブの A 列で先頭の `#` を消す。表を選び「SheetBoard → 選択範囲を掲示板に追加」から追加もできる |
-| `pending` がある | `warn` / `⏳` | 編集を反映待ちです（最大5分） | なし |
+| `pending` がある | `warn` / `⏳` | 編集の反映を待っています（数分以内に自動で公開されます） | なし |
 | 上記以外 | `ok` / `✔` | 正常に公開されています | なし |
 
 `ok` または `warn` のとき、行ごとの警告があれば文言末尾に `（お知らせがあります）` を付ける。
 
+- 設定タブは `settingsSheetId` で追跡し、名前が変わっていた場合は同じタブの名前を戻す。以前公開した範囲があり今回 0 件となる場合は公開を止め、手動操作では確認を求める。
+- 連携解除時は `disconnected` を記録し、自動公開が停止したことを表示する。
+
 ### 6.4 セットアップと GitHub 連携（OAuth Device Flow）
+
+`startSetup` は「他の人の GitHub でセットアップ済み・自分は未連携」の確認を最初に行う。それ以外は、GitHub との連携が必要なときに `beginAuthorization_(true)`、不要なときに `showFinishDialog_()` を呼ぶ。連携が必要な条件は、token が無い、`reauthRequired === 'true'`、DocumentProperties の `lastPublishOutcome === 'reauth_required'`、または `lastPublishStatus === 'failure'` かつ `lastError` に 403（「（エラー番号 403）」または「許可がありません」）が含まれる場合。
+
+`startSetup` と `startSetupConfirmed` は設定タブの準備前に選択範囲を記録する。アクティブなシートが設定タブ以外で、選択が 2 セル以上なら `シート名!A1形式` を UserProperties の `setupSelection` に保存し、それ以外は削除する。`finishSetup` は公開前に、保存した選択範囲があり設定タブに有効な行（A 列が空でなく `#` で始まらない行）が無い場合、`addRangeRow_` で `board1` などの行を追加する。保護された設定タブに書けない場合もセットアップは続ける。追加の有無にかかわらず `setupSelection` を消し、戻り値に `addedName` / `addedRange` を含める。
 
 1. 設定タブを用意する。`gistId` があり実行者にトークンが無い場合は、接続前に現在の GitHub 所有者を示してスタッフは操作不要だと案内する。管理者引き継ぎを選んだときだけ続行する。
 2. トークンが無ければ Device Flow: `POST https://github.com/login/device/code`（`client_id`、`scope=gist`）。`user_code` を大きく表示し、「GitHubを開く」「コードをコピー」と状態行を出す。ダイアログの JS が `interval` 秒ごとに `pollDeviceToken()` を呼ぶ。`authorization_pending` は継続、`slow_down` は +5 秒、`expired_token`「コードの有効期限（15 分）が切れました」、`access_denied`「GitHub で承認がキャンセルされました」、その他「連携できませんでした（エラー名）」でやり直しを案内。`google.script.run` の一時的な失敗は 3 回まで再試行する。
 3. 認証コードを `POST https://github.com/login/oauth/access_token` に `client_id`、`device_code`、`grant_type=urn:ietf:params:oauth:grant-type:device_code` として交換する。`client_secret` は使わない。取得した access token で `GET /user` を行いログイン名を検証してから、返された `access_token`、`refresh_token`、`expires_in`、`refresh_token_expires_in` を UserProperties に保存し、期限は絶対時刻に変換する。失敗した認証試行は現在の保存済み連携を変更しない。
 4. 5 分ごとの既存タイマー公開は、内容が変わらない場合も含め、access token の期限 5 分前から更新する。更新は `POST https://github.com/login/oauth/access_token` に `client_id`、`grant_type=refresh_token`、現在の `refresh_token` を送る。返された新しいトークン一式を直ちに保存してから API 呼び出しを続ける。UserLock で並行更新を防ぐ。GitHub API が 401 を返した場合も一度だけ更新して要求を再試行する。403 は権限不足として更新・再認証エラーと区別する。
-5. refresh token が期限切れ・無効、または旧版の連携に refresh token がなく期限切れになった場合は「GitHub連携をやり直す」を案内し、失敗や一時的なネットワーク障害で保存済みトークンを削除しない。期限情報のない PAT と従来の無期限 OAuth token は期限なしとして扱う。PAT で再連携するとOAuth用メタデータを消す。
+5. refresh token が期限切れ・無効の場合は「セットアップ・修復」を案内し、旧版から更新した場合は「GitHub連携をやり直す」を実行し、失敗や一時的なネットワーク障害で保存済みトークンを削除しない。期限情報のない PAT と従来の無期限 OAuth token は期限なしとして扱う。PAT で再連携するとOAuth用メタデータを消す。
 6. `GITHUB_CLIENT_ID` は配布元の OAuth App の公開 Client ID（秘密ではない）。空のときは「Personal access token（classic、gist 権限）を貼り付ける」ダイアログにし、`X-OAuth-Scopes` に `gist` が無ければ拒否する。PATで保存するとOAuth用メタデータは削除する。
-7. `finishSetup()`: 保存済みの Gist の所有者が実行者と違えば、トリガーを設置せず「この公開先は <所有者> さんの GitHub にあります。管理者を交代する場合は、メニュー「SheetBoard → 管理者用 → 公開先を作り直す」を使ってください」と表示して終わる。それ以外はトリガーを設置し、強制公開し、URL を表示し、URL 変更のお知らせを消す。連携のやり直し（§6.2）でトリガーを設置し直すときも同じ所有者確認を行う。完了結果は `{url, rangeCount}`。完了画面は「✔ セットアップが完了しました」、URL とコピー操作、「このURLをワールド作者に渡してください」を表示する。`rangeCount == 0` なら「公開しました」とは表示せず、表の選択・メニューからの追加（または B 列への手入力と A 列の `#` 削除）・反映待ちを「次にやること」として番号付きで示す。範囲があれば「公開しました（N 個の範囲）」と表示する。完了時は設定タブをアクティブにする。
+ 7. `finishSetup()`: 保存済みの Gist の所有者が実行者と違えば、トリガーを設置せず「この公開先は <所有者> さんの GitHub にあります。管理者を交代する場合は、メニュー「SheetBoard → 管理者用 → 公開先を作り直す」を使ってください」と表示して終わる。それ以外はトリガーを設置し、強制公開し、URL を表示し、URL 変更のお知らせを消す。連携のやり直し（§6.2）でトリガーを設置し直すときも同じ所有者確認を行う。完了結果は `{url, rangeCount, repaired, addedName, addedRange}`。初回の完了画面は「✔ セットアップが完了しました」、修復時は「✔ 修復しました。掲示板URLは変わっていません。」とし、URL とコピー操作、「このURLをワールド作者に渡してください」を表示する。選択していた表を追加した場合は「選択していた表（{範囲}）を「{名前}」として掲示板に出しました。」と表示する。`rangeCount == 0` なら「公開しました」とは表示せず、表の選択・メニューからの追加（または B 列への手入力と A 列の `#` 削除）・反映待ちを「次にやること」として番号付きで示す。範囲があれば「公開しました（N 個の範囲）」と表示する。完了時は設定タブをアクティブにする。
 
 ### 6.5 Gist
 
-- 作成: `POST /gists`、`public: false`、ファイル `sheetboard.json`、description `Sheet Board: <スプレッドシート名>`。gistId・所有者ログイン名・URL を DocumentProperties に保存する。
+- 作成: `POST /gists`、`public: false`、ファイル `sheetboard.json`、description `Sheet Board`。gistId・所有者ログイン名・URL を DocumentProperties に保存する。
 - 更新: `PATCH /gists/{id}`（`Authorization: Bearer`、`Accept: application/vnd.github+json`、`X-GitHub-Api-Version: 2022-11-28`）。
 - URL: `https://gist.githubusercontent.com/<所有者>/<id>/raw/sheetboard.json`（コミット SHA を含めない）。
 - **所有者の確認**: 実行者のログイン名が保存済みの Gist の所有者と違えば PATCH も作り直しもせず、「この公開先は <所有者> さんの GitHub にあります。管理者を交代する場合は、メニュー「SheetBoard → 管理者用 → 公開先を作り直す」を使ってください」というエラーにする（2 人が交互に作り直し続ける事故を防ぐ）。所有者が未保存（旧版から更新した場合）なら、その時点の実行者を所有者として保存する。
@@ -501,9 +517,11 @@ Apps Script が出力し、Source が読む。UTF-8。
 - `ScriptApp.getProjectTriggers()` は実行者自身のトリガーしか返さないので、設置・解除は実行者のトリガーだけを扱う。
 - 単純トリガー名 `onEdit` は使わない。
 
+- トリガー設置時の所有者を `triggerOwner` に記録し、所有者を確認する。
+
 ### 6.8 失敗の通知
 
-種類（HTTP ステータス、それ以外は `other`）ごとに 24 時間に 1 回まで、トリガー所有者へメールする。件名は `SheetBoard: 掲示板の公開が止まっています`。本文は全体状態の「何が起きたか」、利用者が行う番号付き手順、スプレッドシートの URL で構成する。401 または refresh token 失効は「SheetBoard → 管理者用 → GitHub連携をやり直す」を案内する。403 は GitHub で再承認するよう案内する。一時的な refresh 失敗では保存済み認証情報を維持し、次の自動確認で再試行する。
+種類（HTTP ステータス、それ以外は `other`）ごとに 24 時間に 1 回まで、トリガー所有者へメールする。件名は `SheetBoard: 掲示板の公開が止まっています`。本文は全体状態の「何が起きたか」、利用者が行う番号付き手順、スプレッドシートの URL で構成する。401 または refresh token 失効は「SheetBoard → セットアップ・修復」を案内する。403 は同じメニューから GitHub で再承認するよう案内する。一時的な refresh 失敗では保存済み認証情報を維持し、次の自動確認で再試行する。
 
 ### 6.9 `appsscript.json`
 
@@ -541,26 +559,32 @@ V8、`Asia/Tokyo`、スコープは `spreadsheets.currentonly`、`script.externa
 
 ### 7.1 パッケージに含めるメニュー（`Tools/TenteEEEE/Sheet Board/`）
 
-- `Install Sample into Current Scene`: Source 1 つと Display 1 つを配置して配線する。既に Source があれば Display だけ追加し、既存の Display と重ならないよう X 方向にずらし、選択状態にしてログを出す。TMP Essentials が無ければダイアログで案内して中止する。prefab が無ければダイアログで中止する（自動ビルドしない）。
+- `掲示板をシーンに置く`: データ元 1 つと掲示板 1 つを配置して配線する。既にデータ元があれば掲示板だけ追加し、既存の掲示板と重ならないよう X 方向にずらし、選択状態にしてログを出す。シーンビューがあれば pivot に置き、シーンビューから板が見える向きにする。TMP Essentials が無ければ「インポートする／キャンセル」を表示し、インポート後はもう一度メニューを実行するよう案内する。prefab が無ければダイアログで中止する（自動ビルドしない）。
 - メニューは再生中は無効にする（validator）。
 - 同梱の prefab・マテリアル・フォント・program asset はビルド済みで、利用者は Build を実行しない。
 
+- パッケージの場所に依存せず、必要なアセットを解決する。
+
 ### 7.2 Source のインスペクター
 
-- `baseUrl` は前後の空白を除いて使う。
-- 「URL を適用」: `urls` を `baseUrl + ?v=0..N−1`（既に `?` があれば `&v=`）で作り直す。`N = clamp(ceil(300 / max(30, refreshInterval)) + 1, 4, 64)`。`baseUrl` が空なら `urls` を空にする。
-- 「接続を確認」（非同期、`UnityWebRequest`、`redirectLimit = 0`、User-Agent 付き）: 信頼リスト（config の `stringHostUrlList`、失敗時は内蔵の既定リスト）、HTTP 200 でリダイレクトでないこと、`sheetboard/1` であること、gist URL にコミット SHA が無いこと、`http://` でないことを検査し、範囲名の一覧を表示する。確認中はボタンを無効にし、Poll は例外を捕まえて必ず終了処理をする。User-Agent の版数は定数 1 か所で持つ。Inspector と Apps Script（シート側）の UI は日本語のみ。
-- `baseUrl` が空かつ `urls` が空なら「未適用」警告は出さない。
-- proxy を書き換える操作（このボタン、§7.3 の「同じシーンの Source を自動設定」、§7.1 の Install Sample）は、UdonSharp のプログラムが未コンパイルなら先に `UdonSharpCompilerV1.CompileSync` でコンパイルする。その後 `UdonSharpProgramAsset.AnyUdonSharpScriptHasError()` でプロジェクト全体を確認し、Sheet Board 以外の UdonSharp エラーも含め、エラーまたは未生成のプログラムがあれば止めて Console のエラーを直すよう案内する。初回はプログラムアセット作成後にもう一度実行が必要。
-- 有効な Source に利用可能な URL が 1 つも無い場合、または `baseUrl` に対して「URL を適用」していない場合はビルドを止める。無効な Source は検査しない。Source が設定されていない有効な Display には警告を出す。コンパイルエラーも通常のビルドを止める。Play 開始時（`report == null`）は例外で Play を止めず、エラーを Console に記録する。
+- 「掲示板URL」には管理者から受け取った URL を貼る。`baseUrl` は前後の空白を除いて使い、Inspector で関連する欄を変更したとき、ビルド開始時、Undo/Redo、および再生開始時に `urls` へ自動反映する（Inspector を見るだけでは書き換えない）。`N = clamp(ceil(300 / max(30, refreshInterval)) + 1, 4, 64)` とし、URL の `?` / `&` に応じて `?v=0..N−1` または `&v=0..N−1` を付ける。`baseUrl` が空なら `urls` を空にする。ビルド開始時も有効なデータ元へ自動反映を試みる。
+- 接続確認は Inspector の描画時に URL ごとに自動で 1 回行う。同じ URL では失敗しても自動再試行しない。ボタンは「もう一度確認」。非同期の `UnityWebRequest`（`redirectLimit = 0`、User-Agent 付き）で、信頼リスト（config の `stringHostUrlList`、失敗時は内蔵の既定リスト）、HTTP 200 でリダイレクトでないこと、`sheetboard/1` であること、gist URL にコミット SHA が無いこと、`http://` でないことを検査し、結果を平易な文言で表示する。確認中はボタンを無効にし、Poll は例外を捕まえて必ず終了処理をする。User-Agent の版数は定数 1 か所で持つ。Inspector と Apps Script（シート側）の UI は日本語のみ。
+- URL が空かつ `urls` が空なら警告は出さない。
+- Inspector の自動反映はダイアログを出さず、`ProgramsCompiledQuiet()` が false の間は反映しない。代わりに「UdonSharp のコンパイルエラーがあるため、掲示板URLを反映できません。Console のエラーを直してください。」と表示する。
+- 手動で proxy を書き換える操作（§7.3 のデータ元の自動設定、§7.1 の掲示板設置）は、UdonSharp のプログラムが未コンパイルなら先に `UdonSharpCompilerV1.CompileSync` でコンパイルする。その後 `UdonSharpProgramAsset.AnyUdonSharpScriptHasError()` でプロジェクト全体を確認し、Sheet Board 以外の UdonSharp エラーも含め、エラーまたは未生成のプログラムがあれば止めて Console のエラーを直すよう案内する。初回はプログラムアセット作成後にもう一度実行が必要。
+- ビルド開始時に読み込み済みシーンの有効な Source について掲示板URLを自動反映し、最後のビルド検査では URL が無い場合は止める。無効な Source は検査しない。Source が設定されていない有効な Display には警告を出す。コンパイルエラーも通常のビルドを止める。Play 開始時（`report == null`）は例外で Play を止めず、エラーを Console に記録する。
 
 ### 7.3 Display のインスペクター
 
-Display の `language` は Source と同じ `Auto` / `Japanese` / `English` を使い、ワールド内の見出し・状態・更新ボタンを閲覧者の VRChat 言語に合わせる。Editor と Apps Script の UI は日本語のみ。
+Display に `language` フィールドはなく、ワールド内の見出し・状態・更新ボタンの言語は常に Source に従う。Editor と Apps Script の UI は日本語のみ。
 
-- `rangeName` の横に、同じ Source の直近の「接続を確認」で得た範囲名を選べるリストを出す。空欄のときは「（空欄 = 最初の範囲）」と添える。
-- Source の Inspector には「同じシーンの Source を自動設定」ボタンを置く。Display の Inspector では、`source` が空でシーンに Source が 1 つなら「シーンから自動設定」ボタンを表示し、複数あれば手動指定を促す HelpBox を表示する。
+- 基本設定の先頭にデータ元と共通の URL 欄・接続結果を表示し、掲示板 Inspector から掲示板URLを入力できる。Source の参照欄のラベルは「データ元」。
+- 範囲一覧は接続確認後に `SessionState` に保存し、スクリプト再コンパイル後も保持する。「表示する範囲」の横に、同じ Source の確認で得た範囲名を選べるリストを出す。選択肢の先頭は「（自動: 一番上の範囲）」。
+- Display の Inspector では、`source` が空でシーンにデータ元が 1 つなら「同じシーンのデータ元につなぐ」ボタンを表示し、複数あれば「データ元が複数あります。上の欄で選んでください。」を表示する。シーンに無い場合は「データ元を作ってつなぐ」ボタンから作成する。
 - `textScale` はスライダー（0.5〜3）。
+- 基本設定の下に「掲示板のサイズ」を常時表示する。幅・高さ（m、最小 640 × 320 px 相当）を Enter で確定する入力欄と、横長（標準、1600 × 1000）・縦長（1000 × 1800）・正方形（1200 × 1200）のプリセットを用意する。表の Canvas の RectTransform を変更し、同じオブジェクトの BoxCollider の幅・高さ・中心も合わせる（奥行きは維持）。背景と表領域は既存のアンカーに追従する。Undo・Prefab override に対応する。Play Mode 中は変更不可。既存の Canvas サイズは操作するまで変更しない。サイズの直後にテーマ（ライト／ダーク）を選べる。
+
+- 範囲なしは「表示する範囲がまだありません」、未接続は「データ元が設定されていません」、大きな表には「表が大きく文字が小さくなっています」と表示する。
 
 ### 7.4 開発用ツール（パッケージ外）
 
@@ -568,7 +592,7 @@ Display の `language` は Source と同じ `Auto` / `Japanese` / `English` を�
 
 - メニュー `Tools/TenteEEEE/Sheet Board (Dev)/Build Prefabs`（`SheetBoardDev.SheetBoardDevMenu.BuildPrefabsBatch`）と `Tools/TenteEEEE/Sheet Board (Dev)/Export UnityPackage`（`SheetBoardDev.SheetBoardDevMenu.ExportUnityPackageBatch`）。作者が出荷前に実行する。
 - `SheetBoardDev.SheetBoardBatchBuild.RebuildAndPreview`: prefab 再生成、配線検証、権限マトリクス確認、サンプル JSON の撮影をまとめて実行するバッチ入口。
-- `SheetBoardDev.SheetBoardPreview.RenderSampleBatch`: 配線検証（両 prefab の Udon 側の値、Install Sample、データ前のタイトル）とサンプル JSON の撮影（`Logs/SheetBoardPreview*.png`）。
+- `SheetBoardDev.SheetBoardPreview.RenderSampleBatch`: 配線検証（両 prefab の Udon 側の値、「掲示板をシーンに置く」、データ前のタイトル）とサンプル JSON の撮影（`Logs/SheetBoardPreview*.png`）。
 - `SheetBoardDev.SheetBoardPermissionMatrixCheck.RunPermissionMatrix`。メニュー `Tools/TenteEEEE/Sheet Board (Dev)/Verify Permission Matrix`。
 - サンプル JSON（`sample.json`、`sample_fidelity.json`）。
 - dev 用 asmdef `SheetBoard.Editor.Dev`（`SheetBoard.Editor` は `InternalsVisibleTo("SheetBoard.Editor.Dev")`）。
@@ -594,7 +618,7 @@ Display の `language` は Source と同じ `Auto` / `Japanese` / `English` を�
   - 無料 Google アカウントのトリガー総実行時間は 1 日 90 分。大きな表を 5 分ごとに読み直すとこの枠を使い切るおそれがある（未計測）。
   - Apps Script の状態保存値は UTF-8 で 8 KB 以内。範囲名が多すぎる場合は一部を省き、件数を表示する。
 - Gist の CDN キャッシュ（300 秒）は URL ローテーションで避けるが、他のクライアントが直前に読んだ同じ URL からは古い版が返りうる（§3.4 の巻き戻り防止で表示は戻らない）。
-- URL には GitHub のユーザー名、Gist の説明にはスプレッドシート名が入る。
+- URL には GitHub のユーザー名が入り、Gist の説明は `Sheet Board` に固定する。
 - 再現できないもの: 条件付き書式の色、罫線（代わりに格子。罫線を読むには Sheets API と全スプレッドシートの閲覧権限が必要なため、権限を広げない方針で見送り）、画像・グラフ・図形、絵文字やフォントに無い記号、フォントの種類、縦位置（中央固定）。
 - チップ色は参照元セルの色からのみ再現できる。それ以外は名前ごとの自動配色または既定色になる。「矢印」「書式なし」の表示形式のドロップダウンもチップとして描く。
 - Apps Script の無料アカウントのトリガー実行時間は 90 分 / 日。大きな範囲での実行時間は未計測。
@@ -605,20 +629,20 @@ Display の `language` は Source と同じ `Auto` / `Japanese` / `English` を�
 
 Apps Script は 1 スプレッドシートにつき 1 つの URL を公開し、閲覧権限は各 Source で設定する。PermissionController はワールド内の取得・表示を制御し、GitHub 上のアクセス権は変更しない。
 
-| Source の閲覧権限 | 一般（Visitor） | 協力者（Collab） | 管理者（Auth） |
+| Source の閲覧権限 | 一般（Visitor） | ワールドスタッフ（Collab） | ワールド管理者（Auth） |
 | --- | --- | --- | --- |
 | 全員 | 取得・表示 | 取得・表示 | 取得・表示 |
-| 管理者・協力者 | 取得しない・表示しない | 取得・表示 | 取得・表示 |
-| 管理者のみ | 取得しない・表示しない | 取得しない・表示しない | 取得・表示 |
+| ワールドスタッフ以上 | 取得しない・表示しない | 取得・表示 | 取得・表示 |
+| ワールド管理者のみ | 取得しない・表示しない | 取得しない・表示しない | 取得・表示 |
 
-- 閲覧権限は「閲覧に必要な最小権限」とする。管理者にはすべて、協力者には全員と管理者・協力者、一般には全員だけを認める。
+- 閲覧権限は「閲覧に必要な最小権限」とする。ワールド管理者にはすべて、ワールドスタッフには全員とワールドスタッフ以上、一般には全員だけを認める。
 - PermissionController が無いプロジェクトでも、従来の全員向け掲示板を単体で利用できる。制限付きの Source は連携先が無い場合に取得・表示せず、全員公開へ自動で切り替えない。
 - 本節では各端末が自分に許可された公開先を取得する。§2.2 のネットワーク同期を使わない構成を維持し、権限者から他プレイヤーへ本文を中継する機能は含めない。
 
 ### 10.2 Apps Script の配信とデータ分離
 
 - 設定タブは A〜G 列を使う。全ての有効行をまとめ、1 つの JSON に含める。H 列や JSON の audience は使用しない。
-- 1 つのスプレッドシートに `gistId`、所有者、URL、rev、公開状態を保存する。すべての範囲の変更を同じ Gist へ公開し、最後の範囲を削除したときも `ranges: {}` を公開して最新版から内容を除く。
+- 1 つのスプレッドシートに `gistId`、所有者、URL、rev、公開状態を保存する。すべての範囲の変更を同じ Gist へ公開し、最後の範囲を削除したときは確認後に `ranges: {}` を公開して最新版から内容を除く。
 - 閲覧権限により異なるデータを配信する場合は、別のスプレッドシートと Apps Script を使い、各 URL を別の Source / Display に割り当てる。
 
 ### 10.3 Unity 側の設定と任意連携
@@ -628,7 +652,7 @@ Apps Script は 1 スプレッドシートにつき 1 つの URL を公開し、
 - 「接続を確認」はデータ形式を検査し、Source のローカル閲覧権限や設定タブとの一致は要求しない。エディターでの接続確認は作者の端末で行う操作であり、ワールド内の閲覧権限制御の対象ではない。
 - PermissionController のソース・prefab を変更・再配布せず、その C# 型やアセンブリを SheetBoard の必須依存にしない。Force Respawn パッケージも必須依存にしない。
 - 実行時はローカルプレイヤーの PlayerObject 群から、`Controller` が設定された連携先と一致する UdonBehaviour を探し、`CurrentPermission` を読む。候補の変数が存在するかは `GetProgramVariableType` で先に確認し、無関係な behaviour の変数参照エラーを出さない。探索結果をキャッシュし、未生成・破棄時は再探索する。
-- PermissionController の権限値は `Auth = 0`、`Collab = 1`、`Visitor = 2`。値を明示的に対応付け、不明値を管理者として扱わない。PlayerObject 未生成・権限の初期化や復元待ち・参照切れの間は、制限付きの取得・表示を許可しない。
+- PermissionController の権限値は `Auth = 0`、`Collab = 1`、`Visitor = 2`。値を明示的に対応付け、不明値をワールド管理者として扱わない。PlayerObject 未生成・権限の初期化や復元待ち・参照切れの間は、制限付きの取得・表示を許可しない。
 - エディターでの型検出・対応版の検査と、実行時の変数参照方式の参考実装: [PermissionController Force Respawn](https://github.com/TenteEEEE/vrchat-world-permission-controller-force-respawn)。特に `Runtime/ForceRespawnPanel.cs` の `FindPermissionSource` / `ReadPermission` と、`Editor/ForceRespawnPanelEditor.cs` / `ForceRespawnBuildCheck.cs` を参照する。
 
 ### 10.4 取得と表示への適用
@@ -662,7 +686,7 @@ Apps Script は 1 スプレッドシートにつき 1 つの URL を公開し、
 2. 3 権限 × 3 Source 閲覧権限の全組合せが §10.1 の表と一致し、制限付き Source は閲覧権限がない端末で取得しない。
 3. Apps Script は単一 JSON / URL を公開し、最後の範囲の削除と公開失敗後の再試行を確認する。
 4. 途中参加と PlayerObject の生成・権限復元待ちに制限付きの取得が始まらず、解決後は正しく取得する。未知の権限値や異なる Controller の PlayerObject では許可しない。
-5. 管理者→協力者→一般、および逆方向の変更で、取得可否と表示が追従する。権限剥奪時は保持データ・タイトル・プール内の文字列が消える。
+5. ワールド管理者→ワールドスタッフ→一般、および逆方向の変更で、取得可否と表示が追従する。権限剥奪時は保持データ・タイトル・プール内の文字列が消える。
 6. 取得中の剥奪、応答到着前の再付与、無効化・再有効化、タイムアウト後の遅い応答でも旧内容を復活させない。
 7. 閲覧権限がない状態や Controller の未設定・不明状態では、手動更新からも取得できない。
 8. 全員向けと制限付きの掲示板を同時に使い、一般端末と権限者端末それぞれの表示・実際のダウンロード・ログを確認する。Unity のプレビューだけで URL の非露出を検証済みとしない。

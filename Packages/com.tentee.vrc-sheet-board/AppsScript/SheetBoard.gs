@@ -1,6 +1,8 @@
+// Sheet Board 0.5.0
+const SHEET_BOARD_VERSION = '0.5.0';
 /**
  * SheetBoard: シートの表をワールドに公開するためのスクリプトです。
- * シートを開き直し、メニューの「はじめにセットアップ」から始めてください。
+ * シートを開き直し、メニューの「セットアップ・修復」から始めてください。
  */
 const GITHUB_CLIENT_ID = 'Ov23liVU3bFAK2lWtKPk'; // Sheet Board OAuth App（Device Flow）の公開クライアントIDです。秘密情報ではありません。フォークでは独自のIDに置き換えられます。空にするとトークン貼り付け方式になります。
 const GIST_FILENAME = 'sheetboard.json';
@@ -205,14 +207,16 @@ function overallStatus_() {
   })();
   let result;
   if (!props.getProperty('gistId') && !props.getProperty('worldUrl')) {
-    result = {level: 'none', icon: '○', text: 'まだセットアップされていません', action: '管理者がメニュー「SheetBoard → はじめにセットアップ」を実行してください'};
+    result = {level: 'none', icon: '○', text: 'まだセットアップされていません', action: '管理者がメニュー「SheetBoard → セットアップ・修復」を実行してください'};
+  } else if (outcome === 'disconnected') {
+    result = {level: 'warn', icon: '⏸', text: '管理者がGitHub連携を解除したため、自動公開は止まっています', action: '新しい管理者が SheetBoard → セットアップ・修復 を実行してください'};
   } else if (outcome === 'reauth_required') {
-    result = {level: 'error', icon: '⚠', text: 'GitHub連携の期限が切れたため、公開が止まっています', action: '管理者がメニュー「SheetBoard → 管理者用 → GitHub連携をやり直す」を実行してください（URLは変わりません）'};
+    result = {level: 'error', icon: '⚠', text: 'GitHub連携の期限が切れたため、公開が止まっています', action: '管理者がメニュー「SheetBoard → セットアップ・修復」を実行してください（URLは変わりません）'};
   } else if (status === 'failure') {
     const error = String(props.getProperty('lastError') || '').replace(/^\d{4}-\d\d-\d\dT[^ ]+\s*/, '');
     result = {level: 'error', icon: '⚠', text: '公開できませんでした: ' + error, action: errorAction_(error)};
   } else if (Number(props.getProperty('lastPublishMillis') || 0) && nowMillis_() - Number(props.getProperty('lastPublishMillis')) > 90 * 60000) {
-    result = {level: 'warn', icon: '⚠', text: '自動公開が止まっているようです', action: '管理者がメニュー「SheetBoard → はじめにセットアップ」をもう一度実行してください'};
+    result = {level: 'warn', icon: '⚠', text: '自動公開が止まっているようです', action: '管理者がメニュー「SheetBoard → セットアップ・修復」をもう一度実行してください'};
   } else if (!publishedNameCount_(props)) {
     result = {level: 'warn', icon: '⚠', text: '掲示板に出す範囲がありません', action: '設定タブのA列（名前）の先頭の # を消してください。範囲を追加するには、表を選択してメニュー「SheetBoard → 選択範囲を掲示板に追加」'};
   } else if (props.getProperty('pending')) {
@@ -229,21 +233,21 @@ function errorAction_(message) {
   return 'しばらくしても直らない場合は、メニュー「SheetBoard → 状態とURLを表示」の内容を配布者に伝えてください';
 }
 function reconnectMessage_(staff) {
-  return 'GitHub連携の期限が切れたため、公開が止まっています。' + (staff ? '管理者が' : '') + 'メニュー「SheetBoard → 管理者用 → GitHub連携をやり直す」を実行してください（URLは変わりません）。';
+  return 'GitHub連携の期限が切れたため、公開が止まっています。' + (staff ? '管理者が' : '') + 'メニュー「SheetBoard → セットアップ・修復」を実行してください（URLは変わりません）。';
 }
 function permissionMessage_() {
-  return 'GitHubで公開する許可がありません。管理者がメニュー「SheetBoard → 管理者用 → GitHub連携をやり直す」で、もう一度承認してください';
+  return 'GitHubで公開する許可がありません。管理者がメニュー「SheetBoard → セットアップ・修復」で、もう一度承認してください';
 }
 function writeSheetStatus_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(SETTINGS_SHEET);
+  const sheet = findSettingsSheet_();
   if (!sheet) return;
   const props = PropertiesService.getDocumentProperties();
   const rowStatus = parseJsonArray_(props.getProperty('rowStatus'));
   const statusRows = Math.max(0, sheet.getLastRow() - 1);
   const header = sheet.getRange(1, 8).getValues();
   const currentRows = statusRows ? sheet.getRange(2, 8, statusRows, 1).getValues() : [];
-  const nextRows = Array.from({length: statusRows}, (_, index) => [rowStatus[index] || '']);
+  const nextRows = Array.from({length: statusRows}, (_, index) => [props.getProperty('lastPublishOutcome') === 'disconnected' ? '⏸ 公開は止まっています' : (rowStatus[index] || '')]);
   if (header[0][0] !== '状態' || JSON.stringify(currentRows) !== JSON.stringify(nextRows)) {
     try { sheet.getRange(1, 8, statusRows + 1, 1).setValues([['状態']].concat(nextRows)); } catch (e) {}
   }
@@ -261,7 +265,7 @@ function writeSheetStatus_() {
 function page_(bodyHtml, options) {
   options = options || {};
   const closeButton = options.close === false ? '' : '<button class="secondary" onclick="google.script.host.close()">閉じる</button>';
-  return '<style>body{font:14px/1.6 "Google Sans","Hiragino Sans",Meiryo,sans-serif;color:#202124;padding:16px}button{border:0;border-radius:6px;padding:10px 18px;min-height:40px;background:#1a73e8;color:white;cursor:pointer;margin:4px}button.secondary{background:#e8eaed;color:#202124}.status{border-left:5px solid #9aa0a6;background:#f1f3f4;padding:12px}.status.ok{border-color:#188038;background:#e6f4ea}.status.warn{border-color:#f9ab00;background:#fef7e0}.status.error{border-color:#d93025;background:#fce8e6}.url{width:75%;padding:8px}table{border-collapse:collapse}td{padding:4px 10px 4px 0;vertical-align:top}</style>' +
+  return '<style>body{font:14px/1.6 "Google Sans","Hiragino Sans",Meiryo,sans-serif;color:#202124;padding:16px}button,a.button{border:0;border-radius:6px;padding:10px 18px;min-height:40px;background:#1a73e8;color:white;cursor:pointer;margin:4px}a.button{display:inline-block;box-sizing:border-box;text-decoration:none}button.secondary{background:#e8eaed;color:#202124}.status{border-left:5px solid #9aa0a6;background:#f1f3f4;padding:12px}.status.ok{border-color:#188038;background:#e6f4ea}.status.warn{border-color:#f9ab00;background:#fef7e0}.status.error{border-color:#d93025;background:#fce8e6}.url{width:75%;padding:8px}table{border-collapse:collapse}td{padding:4px 10px 4px 0;vertical-align:top}</style>' +
     bodyHtml +
     '<script>' + clientHelpers_() + '</script><p id="copied" aria-live="polite"></p>' + closeButton;
 }
@@ -346,17 +350,31 @@ function onOpen() {
     .addItem('公開先を作り直す', 'recreateDestination')
     .addItem('連携を解除', 'disconnectSheetBoard');
   SpreadsheetApp.getUi().createMenu('SheetBoard')
-    .addItem('はじめにセットアップ', 'startSetup')
+    .addItem('セットアップ・修復', 'startSetup')
     .addItem('選択範囲を掲示板に追加', 'addSelectionToBoard')
     .addItem('今すぐ公開', 'publishNow')
     .addItem('状態とURLを表示', 'showStatus')
     .addSubMenu(admin).addToUi();
+  try { writeSheetStatus_(); } catch (e) {}
+}
+function findSettingsSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const props = PropertiesService.getDocumentProperties();
+  let sheet = ss.getSheetByName(SETTINGS_SHEET);
+  if (!sheet) {
+    const id = props.getProperty('settingsSheetId');
+    if (id) sheet = ss.getSheets().find(s => String(s.getSheetId()) === id);
+    if (sheet) sheet.setName(SETTINGS_SHEET);
+  }
+  if (sheet) props.setProperty('settingsSheetId', String(sheet.getSheetId()));
+  return sheet || null;
 }
 function ensureSettingsSheet_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (ss.getSheetByName(SETTINGS_SHEET)) return;
+  if (findSettingsSheet_()) return;
   const source = ss.getSheets()[0];
   const sheet = ss.insertSheet(SETTINGS_SHEET);
+  PropertiesService.getDocumentProperties().setProperty('settingsSheetId', String(sheet.getSheetId()));
   const name = source.getName() + '!A1:F20';
   sheet.getRange(2, 2, sheet.getMaxRows() - 1, 1).setNumberFormat('@');
   sheet.getRange(2, 4, sheet.getMaxRows() - 1, 2).insertCheckboxes();
@@ -377,22 +395,51 @@ function ensureSettingsSheet_() {
   for (let c = 1; c <= 7; c++) sheet.getRange(1, c).setNote(notes[c - 1]);
   sheet.setColumnWidth(8, 300);
   sheet.setColumnWidth(10, 420);
+  try {
+    sheet.getRange('F:G').shiftColumnGroupDepth(1);
+    sheet.getColumnGroup(6, 1).collapse();
+  } catch (e) {}
 }
 function startSetup() {
+  recordSetupSelection_();
   ensureSettingsSheet_();
   const user = PropertiesService.getUserProperties();
   const props = PropertiesService.getDocumentProperties();
   if (props.getProperty('gistId') && !user.getProperty('token')) {
     const owner = escapeHtml_(props.getProperty('gistOwner') || '未設定');
     showHtml_('セットアップ', '<p>このシートは <b>' + owner + '</b> さんのGitHubで、すでにセットアップされています。スタッフの方は操作不要です。シートを編集するだけで掲示板に反映されます。</p>' +
-      '<button onclick="google.script.host.close()">閉じる</button><button class="secondary" onclick="startSetupConfirmed(this)">管理者を引き継ぐので続ける</button>' +
+      '<p>前の管理者の自動公開は止まります。</p><button onclick="google.script.host.close()">閉じる</button><button class="secondary" onclick="startSetupConfirmed(this)">管理者を引き継ぐので続ける</button>' +
       '<script>function startSetupConfirmed(b){busy(b);google.script.run.withFailureHandler(fail).startSetupConfirmed()}</script>', {close: false});
     return;
   }
-  if (user.getProperty('token') && user.getProperty('reauthRequired') !== 'true') showFinishDialog_();
-  else beginAuthorization_(true);
+  if (needsGitHubAuthorization_(user, props)) beginAuthorization_(true);
+  else showFinishDialog_();
 }
-function startSetupConfirmed() { beginAuthorization_(true); }
+function startSetupConfirmed() { recordSetupSelection_(); beginAuthorization_(true); }
+function recordSetupSelection_() {
+  const user = PropertiesService.getUserProperties();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const active = ss.getActiveSheet();
+  const selected = ss.getActiveRange();
+  if (active && active.getName() !== SETTINGS_SHEET && selected &&
+      (selected.getNumRows() > 1 || selected.getNumColumns() > 1)) {
+    user.setProperty('setupSelection', active.getName() + '!' + selected.getA1Notation());
+  } else {
+    user.deleteProperty('setupSelection');
+  }
+}
+function needsGitHubAuthorization_(user, props) {
+  const error = String(props.getProperty('lastError') || '');
+  return !user.getProperty('token') || user.getProperty('reauthRequired') === 'true' ||
+    props.getProperty('lastPublishOutcome') === 'reauth_required' ||
+    (props.getProperty('lastPublishStatus') === 'failure' && /（エラー番号 403）|許可がありません/.test(error));
+}
+function setupSelectionMessage_() {
+  const range = PropertiesService.getUserProperties().getProperty('setupSelection');
+  return range
+    ? '<p>選択中の表（' + escapeHtml_(range) + '）を、そのまま掲示板に出します。</p>'
+    : '<p>表を選択してから始めると、そのまま掲示板に出せます。あとからでも追加できます。</p>';
+}
 function reconnectGitHub() { beginAuthorization_(false); }
 
 function beginAuthorization_(setup) {
@@ -401,7 +448,7 @@ function beginAuthorization_(setup) {
     const saved = setup === true ? 'finish()' : setup === 'handoff'
       ? 'document.getElementById("status").textContent="連携しました。メニュー「SheetBoard → 管理者用 → 公開先を作り直す」を実行してください。"'
       : 'document.getElementById("status").textContent="連携しました。"';
-    showHtml_('GitHub連携', '<div id="setupFlow"><p>掲示板を自動で更新するために、あなたのGitHubアカウントと連携します。</p>' +
+    showHtml_('GitHub連携', '<div id="setupFlow">' + (setup === true ? setupSelectionMessage_() : '') + '<p>掲示板を自動で更新するために、あなたのGitHubアカウントと連携します。</p>' +
       '<p>GitHubで作成した、gist権限のあるPersonal access token（classic）を貼り付けてください。</p>' +
       '<input id="token" type="password" style="width:95%"><p><button onclick="save()">連携する</button></p>' +
       '<p id="status"></p></div><div id="result" style="display:none"></div>' +
@@ -425,13 +472,13 @@ function beginAuthorization_(setup) {
     const interval = Math.max(1, Number(response.interval) || 5);
     const code = escapeHtml_(response.user_code);
     const uri = escapeHtml_(response.verification_uri);
-    showHtml_('GitHub連携', '<div id="setupFlow"><p>掲示板を自動で更新するために、あなたのGitHubアカウントと連携します。</p>' +
+    showHtml_('GitHub連携', '<div id="setupFlow">' + (setup === true ? setupSelectionMessage_() : '') + '<p>掲示板を自動で更新するために、あなたのGitHubアカウントと連携します。</p>' +
       '<ol><li>「コードをコピー」を押す</li><li>「GitHubを開く」を押す（GitHubにログインしていなければログイン）</li>' +
       '<li>コードを貼り付けて「Continue」→「Authorize」</li><li><b>この画面に戻ってください。閉じないでください。</b>承認を確認すると自動で次に進みます。</li></ol>' +
-      '<div id="code" style="font-size:38px;font-weight:bold">' + code + '</div>' +
-      '<p><a href="' + uri + '" target="_blank" rel="noopener">GitHubを開く</a> <button onclick="copyCode()">コードをコピー</button></p>' +
+      '<input id="code" readonly value="' + code + '" style="font-size:38px;font-weight:bold">' +
+      '<p><button onclick="copyCode()">1. コードをコピー</button> <a class="button" href="' + uri + '" target="_blank" rel="noopener">2. GitHub を開く</a></p>' +
       '<p id="status">GitHubでの承認を待っています…</p></div><div id="result" style="display:none"></div><script>let retries=0,delay=' + interval * 1000 + ';' +
-      'function copyCode(){navigator.clipboard.writeText(document.getElementById("code").textContent).then(function(){document.getElementById("status").textContent="コピーしました";setTimeout(function(){document.getElementById("status").textContent="GitHubでの承認を待っています…"},2000)})}' +
+      'function copyCode(){copyText("code")}' +
       'function poll(){google.script.run.withSuccessHandler(function(r){retries=0;if(r.status==="success"){' +
       '(r.handoff?' + 'document.getElementById("status").textContent="連携しました。メニュー「SheetBoard → 管理者用 → 公開先を作り直す」を実行してください。"' + ':' +
       (setup === true ? 'finish()' : setup === 'handoff' ? 'document.getElementById("status").textContent="連携しました。メニュー「SheetBoard → 管理者用 → 公開先を作り直す」を実行してください。"' : 'document.getElementById("status").textContent="連携しました。"') + ')'+
@@ -444,18 +491,21 @@ function clientHelpers_() {
   return 'function fail(e){var s=document.getElementById("status");if(s)s.textContent=(e&&e.message)||"処理できませんでした。";var b=document.querySelector("button[disabled]");if(b)b.disabled=false}' +
     'function busy(button){if(button)button.disabled=true}' +
     'function beginHandoff(b){busy(b);google.script.run.withSuccessHandler(function(){var s=document.getElementById("status");if(s)s.textContent="GitHubと連携しました。メニュー「SheetBoard → 管理者用 → 公開先を作り直す」を実行してください。"}).withFailureHandler(function(e){b.disabled=false;fail(e)}).beginHandoffAuthorization()}' +
-    'function copyText(id){var e=document.getElementById(id);navigator.clipboard.writeText(e.value||e.textContent).then(function(){var m=document.getElementById("copied");if(m){m.textContent="コピーしました";setTimeout(function(){m.textContent=""},2000)}})}' +
-    'function finish(){var b=event&&event.currentTarget;busy(b);var s=document.getElementById("status");if(s)s.textContent="セットアップを進めています…";' +
-    'google.script.run.withSuccessHandler(function(r){var x=document.getElementById("result");var f=document.getElementById("setupFlow");if(f)f.style.display="none";if(x){x.style.display="block";' +
-    'x.innerHTML="✔ セットアップが完了しました<p>掲示板に出るのは、設定タブに書いた範囲だけです。</p><input id=url class=url readonly><button id=copyurl>コピー</button>"+' +
-    '(r.rangeCount?"<p>公開しました（"+r.rangeCount+" 個の範囲）</p>":"<h3>次にやること</h3><ol><li>掲示板に出したい表のタブを開き、表をドラッグで選択</li>"+' +
+    'function copyText(id){var e=document.getElementById(id),m=document.getElementById("copied");function done(){if(m)m.textContent="コピーしました"}function fallback(){e.focus();e.select();try{if(document.execCommand("copy")){done();return}}catch(ex){}if(m)m.textContent="選択されている文字を Ctrl+C（Mac は ⌘+C）でコピーしてください"}try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(e.value).then(done,fallback)}else fallback()}catch(ex){fallback()}}' +
+    'function finish(confirmed){var b=typeof event!=="undefined"&&event&&event.currentTarget;busy(b);var s=document.getElementById("status");if(s)s.textContent="セットアップを進めています…";' +
+    'google.script.run.withSuccessHandler(function(r){if(r.needsConfirm==="empty"){if(s)s.innerHTML="掲示板が空になります。公開しますか？ <button onclick=finish(true)>はい</button> <button onclick=google.script.host.close()>いいえ</button>";return}var x=document.getElementById("result");var f=document.getElementById("setupFlow");if(f)f.style.display="none";if(x){x.style.display="block";' +
+    'x.innerHTML=(r.repaired?"✔ 修復しました。掲示板URLは変わっていません。":"✔ セットアップが完了しました")+"<p>掲示板に出るのは、設定タブに書いた範囲だけです。</p><input id=url class=url readonly><button id=copyurl>コピー</button>"+' +
+    '(r.addedName?"<p>選択していた表（"+r.addedRange+"）を「"+r.addedName+"」として掲示板に出しました。</p>":r.rangeCount?"<p>公開しました（"+r.rangeCount+" 個の範囲）</p>":"<h3>次にやること</h3><ol><li>掲示板に出したい表のタブを開き、表をドラッグで選択</li>"+' +
     '"<li>メニュー「SheetBoard → 選択範囲を掲示板に追加」（または設定タブのB列に範囲を書き、A列の先頭の # を消す）</li>"+' +
     '"<li>数分以内に掲示板に反映されます</li></ol>");document.getElementById("copyurl").onclick=function(){copyText("url")};' +
-    'document.getElementById("url").value=r.url;}if(s)s.textContent=""}).withFailureHandler(fail).finishSetup()}';
+    'document.getElementById("url").value=r.url;}if(s)s.textContent=""}).withFailureHandler(fail).finishSetup(confirmed===true)}';
 }
 function showFinishDialog_() {
-  showHtml_('セットアップ', '<div id="setupFlow"><p>設定タブを準備して、掲示板用のURLを作ります。</p>' +
-    '<p id="status"></p><button onclick="finish()">セットアップを続ける</button></div>' +
+  const repair = !!PropertiesService.getDocumentProperties().getProperty('gistId');
+  const selection = setupSelectionMessage_();
+  showHtml_('セットアップ', '<div id="setupFlow"><p>' +
+    (repair ? '自動公開を設定し直して、今すぐ公開します。掲示板URLは変わりません。' : '設定タブを準備して、掲示板URLを作ります。') + '</p>' +
+    (repair ? '' : selection) + '<p id="status"></p><button onclick="finish()">' + (repair ? '修復する' : 'セットアップを続ける') + '</button></div>' +
     '<div id="result" style="display:none"></div><script></script>');
 }
 function githubForm_(url, data) {
@@ -709,7 +759,7 @@ function createGist_(content, token) {
     user.setProperty('login', login);
   }
   const files = {}; files[GIST_FILENAME] = {content: content};
-  const gist = githubRequest_('post', '/gists', {description: 'Sheet Board: ' + SpreadsheetApp.getActiveSpreadsheet().getName(), public: false, files: files}, token).body;
+  const gist = githubRequest_('post', '/gists', {description: 'Sheet Board', public: false, files: files}, token).body;
   if (!gist.id) throw new Error('公開先を作成できませんでした。');
   const props = PropertiesService.getDocumentProperties();
   props.setProperties({gistId: gist.id, gistOwner: login, worldUrl: makeWorldUrl_(login, gist.id)});
@@ -737,17 +787,35 @@ function ownerMismatchMessage_(owner) {
   return 'この公開先は ' + owner + ' さんのGitHubにあります。管理者を交代する場合は、メニュー「SheetBoard → 管理者用 → 公開先を作り直す」を使ってください。';
 }
 
-function finishSetup() {
+function finishSetup(confirmedEmpty) {
   ensureSettingsSheet_();
-  if (!PropertiesService.getUserProperties().getProperty('token')) throw new Error('先にGitHubを連携してください。');
+  const user = PropertiesService.getUserProperties();
+  const setupSelection = user.getProperty('setupSelection') || '';
+  user.deleteProperty('setupSelection');
+  if (!user.getProperty('token')) throw new Error('先にGitHubを連携してください。');
+  const props = PropertiesService.getDocumentProperties();
+  const repaired = !!props.getProperty('gistId');
+  let addedName = '';
+  let addedRange = '';
+  try {
+    const settings = findSettingsSheet_();
+    const rows = settings.getLastRow() > 1 ? settings.getRange(2, 1, settings.getLastRow() - 1, 1).getValues() : [];
+    const hasActive = rows.some(row => String(row[0] || '').trim() && !String(row[0] || '').trim().startsWith('#'));
+    if (setupSelection && !hasActive) {
+      const added = addRangeRow_(settings, setupSelection);
+      addedName = escapeHtml_(added.name);
+      addedRange = escapeHtml_(setupSelection);
+    }
+  } catch (e) {}
   checkGistOwner_();
   installTriggers_();
-  const result = publish_(true);
+  const result = publish_(true, false, false, confirmedEmpty ? 'confirmed' : 'dialog');
+  if (result && result.needsConfirm) return result;
   if (!result) throw new Error(publishFailureMessage_());
   PropertiesService.getDocumentProperties().deleteProperty('urlChangeNotice');
   writeSheetStatus_();
-  try { SpreadsheetApp.getActiveSpreadsheet().setActiveSheet(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SETTINGS_SHEET)); } catch (e) {}
-  return {url: worldUrl_(), rangeCount: publishedNameCount_(PropertiesService.getDocumentProperties())};
+  try { SpreadsheetApp.getActiveSpreadsheet().setActiveSheet(findSettingsSheet_()); } catch (e) {}
+  return {url: worldUrl_(), rangeCount: publishedNameCount_(props), repaired: repaired, addedName: addedName, addedRange: addedRange};
 }
 function publishFailureMessage_() {
   const outcome = PropertiesService.getDocumentProperties().getProperty('lastPublishOutcome');
@@ -762,6 +830,16 @@ function installTriggers_() {
   ScriptApp.newTrigger('onEditInstalled').forSpreadsheet(ss).onEdit().create();
   ScriptApp.newTrigger('onChangeInstalled').forSpreadsheet(ss).onChange().create();
   ScriptApp.newTrigger('onTimer').timeBased().everyMinutes(5).create();
+  PropertiesService.getDocumentProperties().setProperty('triggerOwner', triggerIdentity_());
+}
+function triggerIdentity_() {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, Session.getEffectiveUser().getEmail(), Utilities.Charset.UTF_8)
+    .map(b => ('0' + (b & 255).toString(16)).slice(-2)).join('').slice(0, 16);
+}
+function triggerAllowed_() {
+  const owner = PropertiesService.getDocumentProperties().getProperty('triggerOwner');
+  if (owner && owner !== triggerIdentity_()) { removeTriggers_(); return false; }
+  return true;
 }
 function ensureTriggers_() {
   const handlers = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction());
@@ -780,43 +858,34 @@ function removeTriggers_() {
 // Trigger handlers swallow errors: publish_() already records them and mails once a day, and a
 // thrown error would add Google's own failure mail for every run on top of that.
 function onEditInstalled(e) {
+  if (!triggerAllowed_()) return;
   if (e && e.range && e.range.getSheet && e.range.getSheet().getName() === SETTINGS_SHEET && e.range.getColumn() >= 8) return;
   const last = Number(PropertiesService.getDocumentProperties().getProperty('lastTriggerMillis') || 0);
   if (Date.now() - last < 5000) { setPending_(); return; }
   try { publish_(false, true); } catch (e) {}
 }
 function onChangeInstalled(e) {
+  if (!triggerAllowed_()) return;
   if (!e || !['FORMAT', 'INSERT_ROW', 'REMOVE_ROW', 'INSERT_COLUMN', 'REMOVE_COLUMN', 'OTHER'].includes(e.changeType)) return;
   const last = Number(PropertiesService.getDocumentProperties().getProperty('lastTriggerMillis') || 0);
   if (Date.now() - last < 5000) { setPending_(); return; }
   try { publish_(false, true); } catch (e) {}
 }
-function onTimer() { try { publish_(false, true); } catch (e) {} }
+function onTimer() { if (!triggerAllowed_()) return; try { publish_(false, true); } catch (e) {} }
 function setPending_() {
   const props = PropertiesService.getDocumentProperties();
   props.setProperty('pending', Utilities.getUuid());
   writeSheetStatus_();
 }
-function addSelectionToBoard() {
+function addRangeRow_(settings, rangeText) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const selected = ss.getActiveRange();
-  const active = ss.getActiveSheet();
-  if (!selected || (active && active.getName() === SETTINGS_SHEET) ||
-      (selected.getNumRows() === 1 && selected.getNumColumns() === 1)) {
-    showMessage_('掲示板に追加', '掲示板に出したい表のタブを開き、表全体をドラッグで選択してから、メニュー「SheetBoard → 選択範囲を掲示板に追加」をもう一度実行してください。');
-    return;
-  }
-  ensureSettingsSheet_();
-  const settings = ss.getSheetByName(SETTINGS_SHEET);
-  const source = active || selected.getSheet();
-  const range = source.getName() + '!' + selected.getA1Notation();
   let rows = [];
   const last = Math.max(2, settings.getLastRow());
   try {
     rows = settings.getRange(2, 1, last - 1, 7).getValues();
   } catch (e) {
-    showMessage_('掲示板に追加', '設定タブを読み取れませんでした。管理者に範囲を追加するよう伝えてください: ' + range);
-    return;
+    e.settingsReadFailure = true;
+    throw e;
   }
   let target = 0;
   const initial = ss.getSheets()[0].getName() + '!A1:F20';
@@ -837,12 +906,32 @@ function addSelectionToBoard() {
     const empty = rows.findIndex(row => !String(row[0] || '').trim() && !String(row[1] || '').trim());
     target = empty >= 0 ? empty + 2 : Math.max(2, settings.getLastRow() + 1);
   }
-  try {
-    settings.getRange(target, 1, 1, 5).setValues([['board' + number, range, '', false, true]]);
-  } catch (e) {
-    showMessage_('掲示板に追加', '設定タブは管理者だけが編集できます。管理者に、次の範囲を追加するよう伝えてください: ' + range);
+  settings.getRange(target, 1, 1, 5).setValues([['board' + number, rangeText, '', false, true]]);
+  return {name: 'board' + number, row: target};
+}
+function addSelectionToBoard() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const selected = ss.getActiveRange();
+  const active = ss.getActiveSheet();
+  if (!selected || (active && active.getName() === SETTINGS_SHEET) ||
+      (selected.getNumRows() === 1 && selected.getNumColumns() === 1)) {
+    showMessage_('掲示板に追加', '掲示板に出したい表のタブを開き、表全体をドラッグで選択してから、メニュー「SheetBoard → 選択範囲を掲示板に追加」をもう一度実行してください。');
     return;
   }
+  ensureSettingsSheet_();
+  const settings = findSettingsSheet_();
+  const source = active || selected.getSheet();
+  const range = source.getName() + '!' + selected.getA1Notation();
+  let added;
+  try {
+    added = addRangeRow_(settings, range);
+  } catch (e) {
+    const readFailed = !!(e && e.settingsReadFailure);
+    showMessage_('掲示板に追加', (readFailed ? '設定タブを読み取れませんでした。管理者に範囲を追加するよう伝えてください: ' : '設定タブは管理者だけが編集できます。管理者に、次の範囲を追加するよう伝えてください: ') + range);
+    return;
+  }
+  const number = added.name.slice(5);
+  const target = added.row;
   let addMessage;
   if (PropertiesService.getUserProperties().getProperty('token')) {
     try {
@@ -868,16 +957,29 @@ function addSelectionToBoard() {
     ss.setActiveSheet(settings);
   } catch (e) {}
   showMessage_('掲示板に追加', addMessage + '\n名前: board' + number + '\n範囲: ' + range +
-    '\n数分以内に掲示板に反映されます。\nワールドに掲示板が複数ある場合は、ワールド作者に名前「board' + number + '」を伝えてください。');
+    (setupAvailable_() ? '\n数分以内に掲示板に反映されます。' : '\n' + setupUnavailableMessage_()) + '\nワールドに掲示板が複数ある場合は、ワールド作者に名前「board' + number + '」を伝えてください。');
+}
+function setupAvailable_() {
+  const props = PropertiesService.getDocumentProperties();
+  return !!props.getProperty('gistId') && props.getProperty('lastPublishOutcome') !== 'disconnected';
+}
+function setupUnavailableMessage_() {
+  const props = PropertiesService.getDocumentProperties();
+  return props.getProperty('gistId') && props.getProperty('lastPublishOutcome') === 'disconnected'
+    ? '管理者がGitHub連携を解除したため、自動公開は止まっています。新しい管理者が SheetBoard → セットアップ・修復 を実行してください。'
+    : 'まだセットアップされていません。管理者が SheetBoard → セットアップ・修復 を実行すると公開されます。';
 }
 function publishNow() {
   try {
     if (!PropertiesService.getUserProperties().getProperty('token')) {
       setPending_();
-      showMessage_('公開', '受け付けました。数分以内に自動で公開されます。操作は不要です。');
+      showMessage_('公開', setupAvailable_() ? '受け付けました。数分以内に自動で公開されます。操作は不要です。' : setupUnavailableMessage_());
       return;
     }
-    if (publish_(true)) {
+    const result = publish_(true, false, false, 'menu');
+    if (result && result.cancelled) {
+      showMessage_('公開', '公開を取りやめました。掲示板は変わっていません。');
+    } else if (result) {
       const props = PropertiesService.getDocumentProperties();
       const names = JSON.parse(props.getProperty('publishedNames') || '[]');
       const nameCount = publishedNameCount_(props);
@@ -899,8 +1001,8 @@ function publishNow() {
 }
 function readRanges_(startedAt) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const settings = ss.getSheetByName(SETTINGS_SHEET);
-  if (!settings) throw new Error('設定タブがありません。はじめにセットアップを実行してください。');
+  const settings = findSettingsSheet_();
+  if (!settings) throw new Error('設定タブがありません。メニュー「SheetBoard → セットアップ・修復」を実行してください。');
   const config = settings.getLastRow() > 1 ? settings.getRange(2, 1, settings.getLastRow() - 1, 7).getValues() : [];
   const ranges = Object.create(null);
   const seen = Object.create(null);
@@ -1110,7 +1212,7 @@ function sheetTimeZone_() {
   return 'Asia/Tokyo';
 }
 
-function publish_(force, trigger, recreate) {
+function publish_(force, trigger, recreate, emptyPolicy) {
   const startedAt = nowMillis_();
   const lock = LockService.getDocumentLock();
   if (!lock.tryLock(trigger ? 0 : 10000)) {
@@ -1157,6 +1259,7 @@ function publish_(force, trigger, recreate) {
     throw error;
   }
   try {
+    const pending = props.getProperty('pending');
     const data = readRanges_(startedAt);
     const rowStatus = JSON.stringify(boundedStatusArray_(data.rowStatus));
     if (props.getProperty('rowStatus') !== rowStatus) setBoundedProperty_(props, 'rowStatus', rowStatus);
@@ -1169,10 +1272,18 @@ function publish_(force, trigger, recreate) {
     const warnings = JSON.stringify(boundedStatusArray_(data.warnings));
     if (props.getProperty('warnings') !== warnings) setBoundedProperty_(props, 'warnings', warnings);
     const ranges = data.ranges;
+    if (publishedNameCount_(props) > 0 && !Object.keys(ranges).length && emptyPolicy !== 'confirmed') {
+      if (emptyPolicy === 'dialog') return {needsConfirm: 'empty'};
+      if (emptyPolicy === 'menu') {
+        const ui = SpreadsheetApp.getUi();
+        if (ui.alert('掲示板が空になります。公開しますか？', ui.ButtonSet.YES_NO) !== ui.Button.YES) return {cancelled: true};
+      } else {
+        throw new Error('表示する範囲が1つもなくなったため、公開を止めています。設定タブを確認してください。');
+      }
+    }
     const rev = computeRev_(ranges);
     const previousRev = props.getProperty('lastRev');
     let id = props.getProperty('gistId');
-    const pending = props.getProperty('pending');
     if (!force && !pending && rev === previousRev && id &&
         nowMillis_() - Number(props.getProperty('lastPublishMillis') || 0) < HEARTBEAT_MINUTES * 60000) {
       const current = props.getProperties();
@@ -1241,7 +1352,7 @@ function publish_(force, trigger, recreate) {
       .forEach(key => props.deleteProperty(key));
     if (pending && props.getProperty('pending') === pending) props.deleteProperty('pending');
     if (recreated) {
-      const warning = '公開先が新しくなりました。ワールドのURLを差し替えてください: ' + worldUrl_();
+      const warning = '公開先が新しくなりました。ワールド作者に、新しい掲示板URLへの差し替えを依頼してください: ' + worldUrl_();
       props.setProperty('urlChangeNotice', warning);
       try {
         notifyMail_('urlChange', 'SheetBoardのURLが変わりました', warning, props);
@@ -1320,6 +1431,8 @@ function showStatus() {
   }
   const notice = props.getProperty('urlChangeNotice');
   const allWarnings = (notice ? [notice] : []).concat(warnings);
+  const lastErrorText = String(props.getProperty('lastError') || '').replace(/^\d{4}-\d\d-\d\dT[^ ]+\s*/, '');
+  if (error && status.text.indexOf(lastErrorText) < 0) allWarnings.unshift(error);
   const state = '<div class="status ' + status.level + '"><b>' + escapeHtml_(status.icon + ' ' + status.text) + '</b>' +
     (status.action ? '<p>' + escapeHtml_(status.action) + '</p>' : '') + '</div>';
   const urlHtml = url
@@ -1333,9 +1446,8 @@ function showStatus() {
   const warningsHtml = allWarnings.length
     ? allWarnings.map(item => '<li>' + escapeHtml_(item) + '</li>').join('')
     : '<li>ありません</li>';
-  showHtml_('状態とURL', state + '<h3>ワールドに貼るURL</h3>' + urlHtml + details +
-    (error ? '<h3>直近のエラー</h3><p>' + escapeHtml_(error) + '</p>' : '') +
-    '<h3>お知らせ</h3><ul>' + warningsHtml + '</ul><script></script>');
+  showHtml_('状態とURL', state + '<h3>掲示板URL（ワールド作者に渡します）</h3>' + urlHtml + details +
+    '<h3>お知らせ</h3><ul>' + warningsHtml + '</ul><small>スクリプトの版: ' + SHEET_BOARD_VERSION + '</small><script></script>');
 }
 function disconnectSheetBoard() {
   const user = PropertiesService.getUserProperties();
@@ -1366,27 +1478,30 @@ function recreateDestination() {
     '<label><input type="checkbox" id="confirm"> 上の内容を理解しました</label>' + button +
     '<p id="status"></p><div id="newurlresult" style="display:none"></div>' +
     '<script>document.getElementById("confirm").onchange=function(){document.getElementById("run").disabled=!this.checked};' +
-    'function recreate(b){busy(b);google.script.run.withSuccessHandler(function(r){var x=document.getElementById("newurlresult");x.style.display="block";' +
+    'function recreate(b,confirmed){busy(b);google.script.run.withSuccessHandler(function(r){if(r.needsConfirm==="empty"){document.getElementById("status").innerHTML="掲示板が空になります。公開しますか？ <button onclick=recreate(this,true)>はい</button> <button onclick=google.script.host.close()>いいえ</button>";return}var x=document.getElementById("newurlresult");x.style.display="block";' +
     'x.innerHTML="<input id=newurl class=url readonly><button id=copynew>コピー</button>";' +
     'document.getElementById("copynew").onclick=function(){copyText("newurl")};document.getElementById("newurl").value=r.url;' +
     'document.getElementById("status").textContent="ワールド作者に新しいURLを渡してください。";' +
-    '}).withFailureHandler(function(e){b.disabled=false;fail(e)}).recreateDestinationConfirmed()}' +
+    '}).withFailureHandler(function(e){b.disabled=false;fail(e)}).recreateDestinationConfirmed(confirmed===true)}' +
     '</script>';
   showHtml_('公開先を作り直す', html);
 }
 function beginHandoffAuthorization() {
   beginAuthorization_('handoff');
 }
-function recreateDestinationConfirmed() {
+function recreateDestinationConfirmed(confirmedEmpty) {
   if (!PropertiesService.getUserProperties().getProperty('token')) {
     throw new Error('先にGitHubを連携してください。');
   }
-  if (!publish_(true, false, true)) throw new Error(publishFailureMessage_());
+  const result = publish_(true, false, true, confirmedEmpty ? 'confirmed' : 'dialog');
+  if (result && result.needsConfirm) return result;
+  if (!result) throw new Error(publishFailureMessage_());
   ensureTriggers_();
   return {url: worldUrl_()};
 }
 function disconnectConfirmed() {
   const user = PropertiesService.getUserProperties();
+  const owner = isGistOwner_();
   const lock = LockService.getUserLock();
   if (!lock.tryLock(10000)) {
      throw makeError_('連携を解除できませんでした。公開処理が終わってから、もう一度お試しください。', 503);
@@ -1400,6 +1515,7 @@ function disconnectConfirmed() {
     lock.releaseLock();
   }
   removeTriggers_();
+  if (owner) PropertiesService.getDocumentProperties().setProperty('lastPublishOutcome', 'disconnected');
   writeSheetStatus_();
 }
 function escapeHtml_(value) {

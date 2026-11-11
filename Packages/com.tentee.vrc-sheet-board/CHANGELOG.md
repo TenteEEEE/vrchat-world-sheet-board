@@ -2,6 +2,43 @@
 
 All notable changes to this package are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the package uses [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-11-12
+
+### Added
+
+- Add Display Inspector controls for board width and height, landscape/portrait/square presets, and world size in metres. Resizing updates the Canvas and collider together and supports Undo and prefab overrides.
+- Add the script version to the Apps Script status dialog.
+- Edit several boards or data sources at once in the Inspector.
+- Warn in the Apps Script before publishing an empty board, and stop automatic publishing that would empty all boards.
+- Expose `GetStatusLevel()` value `3` for the preparing state.
+
+### Changed
+
+- Apply the board URL automatically when it is edited and right before a build; remove the "URL を適用" button.
+- Check the connection automatically and show the result in plain language; keep the range list across script reloads.
+- Edit the board URL from the Display Inspector; rename user-facing labels to 掲示板URL / データ元 / 表示する範囲.
+- Choose the theme (Light / Dark) from the Display Inspector.
+- Rename the install menu to "掲示板をシーンに置く", place the board in front of the Scene view, and offer to import TMP Essential Resources.
+- Rename the Apps Script menu item to "セットアップ・修復" and route every recovery message to it.
+- Publish the table selected when setup starts as the first board.
+- Show loading and permission-checking states with the busy colour instead of the error colour.
+- A Display always follows its Source language.
+- Update status wording, show a warning for large tables, and use the fixed Gist description `Sheet Board`.
+
+### Fixed
+
+- Locate package assets regardless of package installation path.
+- Preserve published ranges when repairing after the settings tab is renamed.
+- Show disconnected status after GitHub is unlinked rather than reporting normal operation.
+- Show an error colour when a requested range is missing.
+- Show retry status correctly in proximity mode.
+- Prevent text from overflowing dropdown chips.
+
+### Removed
+
+- **Breaking:** Remove Display `language` and replace Source public fields `staleMinutes`, `manualCooldown`, and `startDelayMax` with constants.
+- Remove the "直近のエラー" section from the status dialog; the status block already shows it.
+
 ## [0.4.0] - 2026-11-09
 
 ### Added
@@ -97,7 +134,6 @@ All notable changes to this package are documented here. The format follows [Kee
 
 ### Fixed
 
-- A timed-out URL is retired for twice the request timeout. If every URL is retired, the Source waits for the earliest expiry and clears the pending manual-refresh state instead of remaining stuck.
 - The former administrator's timer no longer updates shared publishing state or sends failure mail after ownership transfers.
 - Failed and expired Device Flow attempts give the correct next step for setup and handoff.
 - Administrator handoff installs automatic publishing triggers after the new destination is published; missing GitHub authorization opens the connection dialog.

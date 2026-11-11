@@ -34,19 +34,19 @@ namespace SheetBoardEditor
                     bool hasError = false;
                     if (!HasValidUrl(source))
                     {
-                        errors.Add("SheetBoard: Source「" + sourceName + "」に URL が設定されていません。Inspector で公開URLを貼り、「URL を適用」を押してください。");
+                        errors.Add("SheetBoard: データ元「" + sourceName + "」に掲示板URLが設定されていません。Inspector の「掲示板URL」に、シートの管理者から受け取った URL を貼ってください。");
                         hasError = true;
                     }
                     if (!string.IsNullOrWhiteSpace(source.baseUrl) && !SheetBoardSourceEditor.UrlsMatch(source))
                     {
-                        errors.Add("SheetBoard: Source「" + sourceName + "」の公開URLが適用されていません。Inspector の「URL を適用」を押してから公開してください。");
+                        errors.Add("SheetBoard: データ元「" + sourceName + "」の掲示板URLを反映できませんでした。" + SheetBoardInstaller.ProgramFailureMessage());
                         hasError = true;
                     }
 
                     string permissionError = ValidateSource(source);
                     if (permissionError != null)
                     {
-                        errors.Add("SheetBoard: Source「" + sourceName + "」" + permissionError);
+                        errors.Add("SheetBoard: データ元「" + sourceName + "」" + permissionError);
                         hasError = true;
                     }
                     if (hasError) errorSources.Add(source);
@@ -57,7 +57,7 @@ namespace SheetBoardEditor
                 {
                     SheetBoardDisplay display = displays[j];
                     if (display == null || !display.gameObject.activeInHierarchy || !display.enabled || display.source != null) continue;
-                    Debug.LogWarning("SheetBoard: Display「" + display.gameObject.name + "」の Source が設定されていません。", display);
+                    Debug.LogWarning("SheetBoard: 掲示板「" + display.gameObject.name + "」のデータ元が設定されていません。", display);
                 }
             }
 
@@ -69,6 +69,7 @@ namespace SheetBoardEditor
 
         private static bool HasValidUrl(SheetBoardSource source)
         {
+            if (string.IsNullOrWhiteSpace(source.baseUrl)) return false;
             if (source.urls == null) return false;
             for (int i = 0; i < source.urls.Length; i++)
                 if (source.urls[i] != null && !string.IsNullOrEmpty(source.urls[i].Get())) return true;
@@ -80,7 +81,7 @@ namespace SheetBoardEditor
             if (source == null || source.audience == SheetBoardAudience.Public) return null;
             UdonBehaviour controller = source.permissionController;
             if (!IsValidController(source, controller))
-                return "は制限付きで、同じシーンの有効な対応版 PermissionController がありません。";
+                return "は閲覧を制限していますが、同じシーンに有効な PermissionController がありません。";
             return null;
         }
 

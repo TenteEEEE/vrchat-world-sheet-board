@@ -15,8 +15,21 @@ using VRC.Udon;
 namespace SheetBoardEditor
 {
     [CustomEditor(typeof(SheetBoardSource))]
+    [CanEditMultipleObjects]
+    [InitializeOnLoad]
     public class SheetBoardSourceEditor : Editor
     {
+        static SheetBoardSourceEditor()
+        {
+            EditorApplication.playModeStateChanged += state => { if (state == PlayModeStateChange.ExitingEditMode) ApplySceneUrls(); };
+            Undo.undoRedoPerformed += ApplySceneUrls;
+        }
+        private static void ApplySceneUrls()
+        {
+            if (EditorApplication.isPlaying || EditorApplication.isCompiling) return;
+            foreach (SheetBoardSource source in UnityEngine.Object.FindObjectsByType<SheetBoardSource>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+                if (source.gameObject.scene.IsValid() && source.gameObject.scene.isLoaded) EnsureUrlsApplied(source);
+        }
         internal sealed class Result
         {
             internal string url;
@@ -27,7 +40,10 @@ namespace SheetBoardEditor
         }
         private const string FallbackUserAgentVersion = "0.1.0";
         private static readonly Dictionary<int, Result> Results = new Dictionary<int, Result>();
+        private static readonly HashSet<int> PendingUrlApply = new HashSet<int>();
+        private static readonly HashSet<int> PendingChecks = new HashSet<int>();
         private static readonly string[] DefaultHosts = { "*.github.io", "pastebin.com", "gist.githubusercontent.com" };
+        private static string[] cachedHosts;
         private bool showUpdate;
         private bool showPermission;
         private bool showTexts;
@@ -48,46 +64,76 @@ namespace SheetBoardEditor
         {
             controllerCandidates = UnityEngine.Object.FindObjectsByType<UdonBehaviour>(FindObjectsInactive.Include, FindObjectsSortMode.None);
         }
+        internal static void DrawUrlSection(SheetBoardSource source)
+        {
+            if (source == null) return;
+            SerializedObject so = new SerializedObject(source);
+            so.Update();
+            SerializedProperty url = so.FindProperty("baseUrl");
+            EditorGUI.BeginChangeCheck();
+            using (new EditorGUI.DisabledScope(EditorApplication.isPlaying))
+                url.stringValue = EditorGUILayout.DelayedTextField(new GUIContent("掲示板URL", "シートのメニュー「SheetBoard → 状態とURLを表示」でコピーできる URL です"), url.stringValue);
+            bool changed = EditorGUI.EndChangeCheck();
+            so.ApplyModifiedProperties();
+            if (EditorApplication.isPlaying) EditorGUILayout.HelpBox("再生中は変更できません", MessageType.Info);
+            string currentUrl = NormalizedUrl(source.baseUrl);
+            int id = source.GetInstanceID();
+            if (changed && !EditorApplication.isPlayingOrWillChangePlaymode && PendingUrlApply.Add(id))
+                EditorApplication.delayCall += () => { PendingUrlApply.Remove(id); if (source != null && !EditorApplication.isPlayingOrWillChangePlaymode) EnsureUrlsApplied(source); };
+            if (!UrlsMatch(source) && !SheetBoardInstaller.ProgramsCompiledQuiet())
+                EditorGUILayout.HelpBox(SheetBoardInstaller.ProgramFailureMessage(), MessageType.Warning);
+            using (new EditorGUI.DisabledScope(Results.TryGetValue(id, out Result pending) && pending.pending))
+                if (GUILayout.Button("もう一度確認") && PendingChecks.Add(id)) EditorApplication.delayCall += () =>
+                {
+                    PendingChecks.Remove(id);
+                    if (source != null) StartCheck(source);
+                };
+            if (Results.TryGetValue(id, out Result result) && result.url == currentUrl)
+            {
+                EditorGUILayout.HelpBox(result.message, result.type);
+            }
+            else if (currentUrl.Length > 0 && HasStoredRanges(RangeSessionKey(currentUrl)))
+            {
+                // After a script reload only the stored range list survives; show the same success line from it.
+                string stored = SessionState.GetString(RangeSessionKey(currentUrl), "");
+                EditorGUILayout.HelpBox(stored.Length == 0 ? "✔ 読み込めます。まだ範囲がありません。シート側で範囲を追加してください。" : "✔ 読み込めます。範囲: " + stored.Replace("\n", ", "), MessageType.Info);
+            }
+            bool hasCurrentResult = (Results.TryGetValue(id, out Result previous) && previous.url == currentUrl) || HasStoredRanges(RangeSessionKey(currentUrl));
+            if (currentUrl.Length > 0 && !hasCurrentResult)
+            {
+                if (PendingChecks.Add(id)) EditorApplication.delayCall += () =>
+                {
+                    PendingChecks.Remove(id);
+                    if (source != null && NormalizedUrl(source.baseUrl) == currentUrl &&
+                        (!Results.TryGetValue(id, out Result existing) || existing.url != currentUrl)) StartCheck(source);
+                };
+            }
+        }
         internal static string[] GetRanges(SheetBoardSource source)
         {
-            if (source != null && Results.TryGetValue(source.GetInstanceID(), out Result result) &&
-                result.url == NormalizedUrl(source.baseUrl) && result.type != MessageType.Error)
-                return result.ranges;
+            if (source != null && Results.TryGetValue(source.GetInstanceID(), out Result result) && result.url == NormalizedUrl(source.baseUrl))
+                return result.type == MessageType.Error ? Array.Empty<string>() : result.ranges;
+            string key = RangeSessionKey(source == null ? "" : NormalizedUrl(source.baseUrl));
+            if (HasStoredRanges(key))
+            {
+                string stored = SessionState.GetString(key, "");
+                return stored.Length == 0 ? Array.Empty<string>() : stored.Split('\n');
+            }
             return Array.Empty<string>();
         }
+        private static string RangeSessionKey(string url) { return "SheetBoard.Ranges." + url; }
+        private const string NoStoredRanges = "\u0001none";
+        // SessionState has no key lookup, so a marker default tells a missing entry from an empty range list.
+        private static bool HasStoredRanges(string key) { return SessionState.GetString(key, NoStoredRanges) != NoStoredRanges; }
         public override void OnInspectorGUI()
         {
             if (UdonSharpGUI.DrawDefaultUdonSharpBehaviourHeader(target)) return;
             serializedObject.Update();
             SheetBoardSource source = (SheetBoardSource)target;
             EditorGUILayout.LabelField("基本設定", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(
-                serializedObject.FindProperty("baseUrl"), new GUIContent("ベース URL"));
-            EditorGUILayout.PropertyField(
-                serializedObject.FindProperty("language"), new GUIContent("表示言語（自動 = 見る人の VRChat の言語）"));
-            serializedObject.ApplyModifiedProperties();
+            if (targets.Length == 1) DrawUrlSection(source);
+            else EditorGUILayout.HelpBox("複数選択中は表示しません", MessageType.Info);
             serializedObject.Update();
-            EditorGUILayout.HelpBox("通常はURLを貼り付けて適用し、接続を確認するだけで始められます。", MessageType.Info);
-            if (!UrlsMatch(source)) EditorGUILayout.HelpBox("URL は未適用、または生成済み URL と一致しません。", MessageType.Warning);
-            if (GUILayout.Button("URL を適用"))
-            {
-                serializedObject.ApplyModifiedProperties();
-                EditorApplication.delayCall += () => ApplyUrls(source);
-                GUIUtility.ExitGUI();
-            }
-            using (new EditorGUI.DisabledScope(Results.TryGetValue(source.GetInstanceID(), out Result pending) && pending.pending))
-                if (GUILayout.Button("接続を確認"))
-                {
-                    serializedObject.ApplyModifiedProperties();
-                    EditorApplication.delayCall += () => StartCheck(source);
-                    GUIUtility.ExitGUI();
-                }
-            if (Results.TryGetValue(source.GetInstanceID(), out Result result))
-            {
-                if (result.url != NormalizedUrl(source.baseUrl)) EditorGUILayout.HelpBox("URL が変わりました。接続を再確認してください。", MessageType.Warning);
-                else EditorGUILayout.HelpBox(result.message, result.type);
-                if (result.pending) Repaint();
-            }
             bool isRestricted = source.audience != SheetBoardAudience.Public;
             GetControllerCandidateSummary(source, out bool assignedValid, out int candidateCount, out UdonBehaviour onlyCandidate);
             if (isRestricted && !assignedValid)
@@ -99,25 +145,35 @@ namespace SheetBoardEditor
             if (showPermission)
             {
                 EditorGUILayout.HelpBox(
-                    "このSourceの、ワールド内での読み込みと表示を制限します。制限する場合は、先にPermissionControllerを指定してください。データのURLは、知っていればワールドの外からでも読めます。見せてはいけない情報は、掲示板に出す範囲に入れないでください。",
+                    "このデータ元の、ワールド内での読み込みと表示を制限します。制限する場合は、先に PermissionController を指定してください。データのURLは、知っていればワールドの外からでも読めます。見せてはいけない情報は、掲示板に出す範囲に入れないでください。",
                     MessageType.Info);
                 EditorGUILayout.PropertyField(
                     serializedObject.FindProperty("permissionController"), new GUIContent("PermissionController"));
                 serializedObject.ApplyModifiedProperties();
                 serializedObject.Update();
                 bool valid = assignedValid;
+                using (new EditorGUI.DisabledScope(candidateCount != 1))
                 if (GUILayout.Button("シーンから自動設定"))
                 {
                     serializedObject.ApplyModifiedProperties();
-                    if (candidateCount == 1) EditorApplication.delayCall += () => AssignController(source, onlyCandidate);
+                    if (candidateCount == 1)
+                    {
+                        UnityEngine.Object[] selected = targets;
+                        EditorApplication.delayCall += () => { foreach (UnityEngine.Object item in selected) if (item != null) AssignController((SheetBoardSource)item, onlyCandidate); };
+                    }
                     GUIUtility.ExitGUI();
                 }
                 DrawControllerCandidates(candidateCount);
                 SerializedProperty audienceProperty = serializedObject.FindProperty("audience");
-                string[] labels = { "全員", "管理者・協力者", "管理者のみ" };
+                string[] labels = { "全員", "ワールドスタッフ以上", "ワールド管理者のみ" };
                 using (new EditorGUI.DisabledScope(!valid))
-                    audienceProperty.enumValueIndex = EditorGUILayout.Popup(
-                        "閲覧権限", audienceProperty.enumValueIndex, labels);
+                {
+                    EditorGUI.showMixedValue = audienceProperty.hasMultipleDifferentValues;
+                    EditorGUI.BeginChangeCheck();
+                    int audience = EditorGUILayout.Popup("閲覧権限", audienceProperty.enumValueIndex, labels);
+                    if (EditorGUI.EndChangeCheck()) audienceProperty.enumValueIndex = audience;
+                    EditorGUI.showMixedValue = false;
+                }
                 bool restricted = source.audience != SheetBoardAudience.Public;
                 if (restricted && !valid && GUILayout.Button("閲覧権限を全員に戻す"))
                 {
@@ -126,18 +182,23 @@ namespace SheetBoardEditor
                     GUIUtility.ExitGUI();
                 }
             }
-            showUpdate = EditorGUILayout.Foldout(showUpdate, "更新動作（任意）", true);
+            showUpdate = EditorGUILayout.Foldout(showUpdate, "読み込みの調整（任意）", true);
             if (showUpdate)
             {
+                EditorGUI.BeginChangeCheck();
                 Draw("refreshInterval");
+                if (EditorGUI.EndChangeCheck())
+                {
+                    serializedObject.ApplyModifiedProperties();
+                    foreach (UnityEngine.Object item in targets) EnsureUrlsApplied((SheetBoardSource)item);
+                    serializedObject.Update();
+                }
                 Draw("nearRadius");
-                Draw("staleMinutes");
-                Draw("manualCooldown");
-                Draw("startDelayMax");
             }
-            showTexts = EditorGUILayout.Foldout(showTexts, "文言の上書き（空欄なら表示言語の既定文言）", true);
+            showTexts = EditorGUILayout.Foldout(showTexts, "表示言語と文言（任意）", true);
             if (showTexts)
             {
+                EditorGUILayout.PropertyField(serializedObject.FindProperty("language"), new GUIContent("表示言語（自動 = 見る人の VRChat の言語）"));
                 EditorGUILayout.HelpBox("{code} = エラー、{s} = 秒、{time} = 更新時刻、{ago} = 経過時間", MessageType.Info);
                 Draw("permissionDeniedText");
                 Draw("permissionWaitingText");
@@ -189,12 +250,8 @@ namespace SheetBoardEditor
         {
             switch (name)
             {
-                case "baseUrl": return new GUIContent("ベース URL");
-                case "refreshInterval": return new GUIContent("更新間隔（秒）");
-                case "nearRadius": return new GUIContent("近接半径（m）");
-                case "staleMinutes": return new GUIContent("古いデータとする時間（分）");
-                case "manualCooldown": return new GUIContent("手動更新の待機時間（秒）");
-                case "startDelayMax": return new GUIContent("初回取得の最大遅延（秒）");
+                case "refreshInterval": return new GUIContent("読み込み間隔（秒）");
+                case "nearRadius": return new GUIContent("近づいたときだけ読み込む距離（m、0 = 常に読み込む）");
                 case "refreshingSuffix": return new GUIContent("更新中の表示（末尾に追加）");
                 case "permissionDeniedText": return new GUIContent("閲覧権限なし");
                 case "permissionWaitingText": return new GUIContent("権限確認中");
@@ -215,8 +272,8 @@ namespace SheetBoardEditor
         {
             switch (audience)
             {
-                case SheetBoardAudience.Staff: return "管理者・協力者";
-                case SheetBoardAudience.Admin: return "管理者のみ";
+                case SheetBoardAudience.Staff: return "ワールドスタッフ以上";
+                case SheetBoardAudience.Admin: return "ワールド管理者のみ";
                 default: return "全員";
             }
         }
@@ -237,9 +294,16 @@ namespace SheetBoardEditor
             for (int i = 0; i < count; i++) if (source.urls[i] == null || source.urls[i].Get() != UrlAt(baseUrl, i)) return false;
             return true;
         }
+        internal static bool EnsureUrlsApplied(SheetBoardSource source)
+        {
+            if (source == null) return false;
+            if (UrlsMatch(source)) return true;
+            if (!SheetBoardInstaller.ProgramsCompiledQuiet()) return false;
+            ApplyUrls(source);
+            return true;
+        }
         private static void ApplyUrls(SheetBoardSource source)
         {
-            if (!SheetBoardInstaller.CheckProgramsCompiled()) return;
             SheetBoardInstaller.RecordProxyUndo(source, "Apply Sheet Board URLs");
             string baseUrl = NormalizedUrl(source.baseUrl);
             source.baseUrl = baseUrl;
@@ -256,7 +320,7 @@ namespace SheetBoardEditor
             Result result = new Result { url = NormalizedUrl(source.baseUrl) };
             Results[source.GetInstanceID()] = result;
             if (!Uri.TryCreate(result.url, UriKind.Absolute, out Uri uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-            { result.message = "有効な HTTP(S) URL を入力してください。"; result.type = MessageType.Error; return; }
+            { SessionState.EraseString(RangeSessionKey(result.url)); result.message = "https:// で始まる URL を入力してください。"; result.type = MessageType.Error; return; }
             result.pending = true;
             new Check(result, uri).Start();
         }
@@ -267,12 +331,11 @@ namespace SheetBoardEditor
             private UnityWebRequest request;
             private bool config = true;
             private string[] hosts = DefaultHosts;
-            private bool fallback;
             internal Check(Result result, Uri uri) { this.result = result; this.uri = uri; }
             internal void Start()
             {
-                try { Send("https://api.vrchat.cloud/api/1/config"); EditorApplication.update += Poll; }
-                catch (Exception e) { Finish("接続できません: " + e.Message, MessageType.Error); }
+                try { if (cachedHosts != null) { hosts = cachedHosts; config = false; Send(uri.AbsoluteUri); } else Send("https://api.vrchat.cloud/api/1/config"); EditorApplication.update += Poll; }
+                catch (Exception e) { Finish("接続できませんでした。（詳細: " + e.Message + "）", MessageType.Error); }
             }
             private void Send(string url) { request = UnityWebRequest.Get(url); request.redirectLimit = 0; request.timeout = 15;
                 // The VRChat API rejects requests without a User-Agent of its own.
@@ -280,37 +343,41 @@ namespace SheetBoardEditor
             private void Poll()
             {
                 try { PollRequest(); }
-                catch (Exception e) { Finish("接続できません: " + e.Message, MessageType.Error); }
+                catch (Exception e) { Finish("接続できませんでした。（詳細: " + e.Message + "）", MessageType.Error); }
             }
             private void PollRequest()
             {
                 if (!request.isDone) return;
                 if (config)
                 {
-                    if (request.result == UnityWebRequest.Result.Success && TryHosts(request.downloadHandler.text, out string[] fetched)) hosts = fetched;
-                    else fallback = true;
+                    if (request.result == UnityWebRequest.Result.Success && TryHosts(request.downloadHandler.text, out string[] fetched)) hosts = cachedHosts = fetched;
+                    else hosts = DefaultHosts;
                     request.Dispose(); config = false;
-                    try { Send(uri.AbsoluteUri); } catch (Exception e) { Finish("接続できません: " + e.Message, MessageType.Error); }
+                    try { Send(uri.AbsoluteUri); } catch (Exception e) { Finish("接続できませんでした。（詳細: " + e.Message + "）", MessageType.Error); }
                     return;
                 }
-                string notes = HostTrusted(uri.Host, hosts) ? "信頼ホストです。" : "信頼ホスト一覧にありません。";
-                if (fallback) notes += "（内蔵一覧を使用）";
-                bool warning = !HostTrusted(uri.Host, hosts);
-                if (uri.Scheme == Uri.UriSchemeHttp) { notes += "\nHTTP は HTTPS へのリダイレクトで失敗する可能性があります。"; warning = true; }
+                bool trusted = HostTrusted(uri.Host, hosts);
+                string hostWarning = trusted ? "" : "このURLのサイトは、VRChat が読み込みを許可していません。シートのメニュー「状態とURLを表示」に出る URL を、そのまま貼ってください。\n";
+                string prefix = "";
+                bool warning = !trusted;
+                if (uri.Scheme == Uri.UriSchemeHttp) { prefix = "http:// の URL は VRChat で読めないことがあります。https:// の URL を使ってください。\n"; warning = true; }
                 if (uri.Host.Equals("gist.githubusercontent.com", StringComparison.OrdinalIgnoreCase) && Regex.IsMatch(uri.AbsolutePath, @"(?:^|/)[0-9a-fA-F]{40}(?:/|$)"))
-                { notes += "\n固定版の URL です。更新されません"; warning = true; }
+                { prefix = "これは特定の時点の内容を指す URL です。シートを編集しても掲示板は変わりません。シートのメニュー「状態とURLを表示」に出る URL を貼ってください。\n"; warning = true; }
                 long status = request.responseCode;
-                if (status >= 300 && status < 400) { Finish(notes + "\nこの URL はリダイレクトするので VRChat では読めません\nLocation: " + request.GetResponseHeader("Location"), MessageType.Error); return; }
-                if (status != 200 || request.result != UnityWebRequest.Result.Success) { Finish(notes + "\nHTTP " + status + ": " + request.error, MessageType.Error); return; }
+                if (status >= 300 && status < 400) { Finish("この URL は別の場所へ転送されるため、VRChat では読めません。シートのメニュー「状態とURLを表示」に出る URL を貼ってください。（詳細: HTTP " + status + " → " + request.GetResponseHeader("Location") + "）", MessageType.Error); return; }
+                if (request.result != UnityWebRequest.Result.Success && status == 0) { Finish("接続できませんでした。ネットワークを確認してください。（詳細: " + request.error + "）", MessageType.Error); return; }
+                if (status != 200 || request.result != UnityWebRequest.Result.Success) { Finish("読み込めませんでした。URL が正しいか確認してください。（詳細: HTTP " + status + " " + request.error + "）", MessageType.Error); return; }
                 if (!TryRanges(request.downloadHandler.text, out string[] ranges))
                 {
-                    Finish(notes + "\n本文は sheetboard/1 のJSONではありません。", MessageType.Error);
+                    Finish("Sheet Board のデータではありません。掲示板URLを確認してください。", MessageType.Error);
                     return;
                 }
                 result.ranges = ranges;
-                Finish(notes + "\nHTTP 200 / sheetboard/1\n範囲: " + (ranges.Length == 0 ? "（なし）" : string.Join(", ", ranges)), warning ? MessageType.Warning : MessageType.Info);
+                SessionState.SetString(RangeSessionKey(result.url), string.Join("\n", ranges));
+                string success = ranges.Length == 0 ? "✔ 読み込めます。まだ範囲がありません。シート側で範囲を追加してください。" : "✔ 読み込めます。範囲: " + string.Join(", ", ranges);
+                Finish(prefix + hostWarning + success, warning ? MessageType.Warning : MessageType.Info);
             }
-            private void Finish(string message, MessageType type) { result.message = message; result.type = type; result.pending = false; EditorApplication.update -= Poll; if (request != null) { request.Dispose(); request = null; } }
+            private void Finish(string message, MessageType type) { if (type == MessageType.Error) SessionState.EraseString(RangeSessionKey(result.url)); result.message = message; result.type = type; result.pending = false; EditorApplication.update -= Poll; UnityEditorInternal.InternalEditorUtility.RepaintAllViews(); if (request != null) { request.Dispose(); request = null; } }
         }
         private static bool HostTrusted(string host, string[] hosts)
         {

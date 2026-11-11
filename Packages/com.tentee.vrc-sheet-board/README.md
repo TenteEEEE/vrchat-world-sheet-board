@@ -13,16 +13,16 @@ Each spreadsheet publishes all enabled ranges through one URL. Set in-world view
 
 ## Requirements
 
-- Unity 2022.3, VRChat Worlds SDK 3.10.0 or later (UdonSharp, TextMeshPro with TMP Essential Resources imported)
+- Unity 2022.3, VRChat Worlds SDK 3.10.0 or later (UdonSharp, TextMeshPro)
 - A Google account for the spreadsheet, and one GitHub account for the team admin (a dedicated shared account is recommended)
 
 ## Install
 
-Add `https://tenteeeee.github.io/vpm-repos/index.json` in VRChat Creator Companion (Settings → Packages → Add Repository), then add **Sheet Board** to your project. The prefabs are prebuilt; no build step is needed.
+Add `https://tenteeeee.github.io/vpm-repos/index.json` in VRChat Creator Companion (Settings → Packages → Add Repository), then add **Sheet Board** to your project. The prefabs are prebuilt; no build step is needed. The placement menu offers to import TMP Essential Resources if needed.
 
 For manual installation, import the `.unitypackage` from [GitHub Releases](https://github.com/TenteEEEE/vrchat-world-sheet-board/releases). Its Apps Script files are under `Assets/SheetBoard/AppsScript/`.
 
-After updating `SheetBoard.gs` in an existing spreadsheet, reconnect once using **SheetBoard → 管理者用 → GitHub連携をやり直す (Admin → Reconnect GitHub)**. Reconnect with the same GitHub account; existing Gist URLs remain unchanged.
+After replacing `SheetBoard.gs` in an existing spreadsheet, the admin must run **SheetBoard → 管理者用 → GitHub連携をやり直す** to reconnect with the same GitHub account; existing Gist URLs remain unchanged. If authorization expires, run **SheetBoard → セットアップ・修復**.
 
 ## How it works
 
@@ -43,14 +43,16 @@ VRChat's String Loading only reads from an allowlist of hosts and Google is not 
 
 ## Setup (short version)
 
-1. **Admin** — install the bundled Apps Script in the spreadsheet, then run **SheetBoard → はじめにセットアップ (Initial setup)** and configure the ranges in **SheetBoard設定 (settings tab)**.
-2. **World creator** — add the Source and Display prefabs, apply the URL, and set the viewing level if needed.
+1. **Admin** — install the bundled Apps Script in the spreadsheet, then select the table first and run **SheetBoard → セットアップ・修復 (Setup / Repair)**; the selected table is published as the first board. Configure additional ranges in **SheetBoard設定 (settings tab)**.
+2. **World creator** — run **Tools → TenteEEEE → Sheet Board → 掲示板をシーンに置く (Place a board in the scene)**, then paste the board URL into the board's Inspector. The URL is applied and checked automatically.
 
 When formatting is enabled for a range (column E in the settings tab), dropdowns are displayed as chips.
 
 The Japanese guide has the detailed setup steps, menu labels, status messages, and troubleshooting: [README.ja.md](README.ja.md#目次).
 
-Before building, each active Source needs a non-empty published URL that has been applied. A restricted Source also needs a supported PermissionController. Inactive or disabled Sources are ignored. A Display without a Source produces a warning.
+The board URL is applied automatically, including right before a build. A build stops only if an active Source has no URL.
+
+Selecting a Source with a board URL in the Inspector accesses that URL once to check the connection when no result is available yet.
 
 The Unity Editor and Apps Script interfaces are Japanese only.
 
@@ -60,7 +62,11 @@ The Unity Editor and Apps Script interfaces are Japanese only.
 - Spreadsheet editors can change what is published and can edit the bound script, which runs with the admin's GitHub authorisation. Only trusted people should be editors; protect the settings tab; use a GitHub account dedicated to Sheet Board.
 - A spreadsheet publishes all enabled ranges through one URL. PermissionController controls viewing inside the world and does not change GitHub access. Keep private information out of published ranges.
 
+- The board URL contains the GitHub username. If sensitive data was published accidentally, remove it from the sheet and delete the Gist to remove its history. A new Gist has a different URL, so the world creator must replace the URL and re-upload the world; copies already obtained cannot be recalled.
+
 ## Limits and technical ceilings
+
+To change the board shape, select a Display and use **掲示板のサイズ** (Board size) in its Inspector. Choose landscape, portrait, or square, or enter the width and height in metres. The Canvas and its collider resize together, with Undo and prefab overrides supported. Choose the theme (Light / Dark) in the Inspector. For tall tables, increase the height or split the published range across multiple boards; the whole range fits on one board without scrolling.
 
 Conditional-format colours, borders, images/charts, emoji and font families are not reproduced. Borders are omitted to avoid expanding spreadsheet access permissions; thin grid lines are shown instead. Dropdown chip colours can be read from the source cells when a dropdown uses values from a range and those cells have colours. Otherwise, chips are coloured automatically by name; turn off the Display option for colouring chips by name to disable automatic colours. Dropdowns are displayed as chips regardless of their Sheets display style.
 
@@ -72,7 +78,7 @@ The bundled Noto Sans JP font does not include Hangul, Simplified Chinese, or em
 
 ## Display language
 
-In-world Source and Display messages can use Japanese or English. Auto follows each visitor's VRChat language: Japanese when it starts with `ja`, and English otherwise. The Editor and Apps Script interfaces are Japanese only.
+In-world Source and Display messages can use Japanese or English. Auto follows each visitor's VRChat language: Japanese when it starts with `ja`, and English otherwise. A Display always follows its Source. The Editor and Apps Script interfaces are Japanese only.
 
 ## Upgrading from 0.x
 
@@ -80,12 +86,21 @@ In-world Source and Display messages can use Japanese or English. Auto follows e
 - Source and Display text fields now override the Japanese and English defaults. Leave a field empty, or set it to its old Japanese default, to use the default for the selected display language.
 - When moving from a `.unitypackage` install to VPM, the old `Assets/SheetBoard` folder is cleaned up. Do not install the package by both methods.
 
+- Updating the Unity package does not update the script in the spreadsheet. The old menu remains until the new `SheetBoard.gs` is pasted into it.
+- Old → new names: **はじめにセットアップ** → **セットアップ・修復**; **Install Sample into Current Scene** → **掲示板をシーンに置く**; **URL を適用** was removed because the board URL is applied automatically.
+- Check the script version at the end of **状態とURLを表示** (スクリプトの版: X).
+- Breaking change: Display `language` was removed; Source `staleMinutes`, `manualCooldown`, and `startDelayMax` are now constants.
+
 ## Troubleshooting
 
-- **No URL is set:** Paste the published URL into the Source and click `URL を適用` (Apply URL).
+- **No URL is set:** Paste the board URL into the board's Inspector.
 - **Range not found:** Check the range name in the spreadsheet settings and the Display. An empty Display range name uses the first configured range.
-- **Auto-publish has stopped:** Open the Japanese SheetBoard menu and check the publishing status and URL. Reconnect the same GitHub account if authorization has expired.
+- **Auto-publish has stopped:** Open the Japanese SheetBoard menu and check the publishing status and URL. Run **SheetBoard → セットアップ・修復** if authorization has expired.
 - **□ boxes:** The bundled font lacks some scripts and emoji. Use Japanese or English text supported by Noto Sans JP.
+
+In-world status examples: `Updated 21:05 (just now)`, `Updated 21:05 (2 h ago) · may be out of date`, `Updated 21:05 (3 min ago) · retrying`, `Loading…`, `Come closer to load`, and `Couldn't load · retrying in 10s (timed out)`. Errors can also say `invalid data` or `HTTP 404`.
+
+Other messages include `No range has been published yet`, `No data source is set`, `You don't have permission to view this`, `Checking permission…`, and `· table is too large to read comfortably`.
 
 ## VRChat String Loading
 

@@ -64,7 +64,6 @@ namespace SheetBoardDev
             GameObject sourceObject = new GameObject("Preview Source");
             SheetBoardSource source = sourceObject.AddUdonSharpComponent<SheetBoardSource>();
             source.language = SheetBoardLanguage.Japanese;
-            display.language = SheetBoardLanguage.Japanese;
             display.source = source;
             string json = File.ReadAllText("Assets/SheetBoardDev/Samples/sample.json", Encoding.UTF8);
             if (!source.ApplyJson(json)) throw new InvalidOperationException("Invalid sample JSON.");
@@ -74,10 +73,12 @@ namespace SheetBoardDev
             if (!source.ApplyJson(json) || source.GetRevision() != 1)
                 throw new InvalidOperationException("Re-applying the same rev must not bump the revision.");
             VerifyBusyIndicator(source);
+            VerifyStatusIndicators(source, display);
             display.rangeName = "";
             Canvas.ForceUpdateCanvases();
             display.RenderNow();
             VerifyLanguage(source, display);
+            VerifyRuntimeRegressions(display);
             if (display.titleText.text != "今週のイベント予定")
                 throw new InvalidOperationException("Empty rangeName did not render the first range.");
             GameObject cameraObject = new GameObject("Preview Camera");
@@ -124,7 +125,6 @@ namespace SheetBoardDev
                         sourceObject = new GameObject("Preview Source");
                         source = sourceObject.AddUdonSharpComponent<SheetBoardSource>();
                         source.language = SheetBoardLanguage.Japanese;
-                        display.language = SheetBoardLanguage.Japanese;
                         display.source = source;
                         if (!source.ApplyJson(fidelityJson) || source.GetRange(ranges[r]) == null)
                             throw new InvalidOperationException("Invalid fidelity sample or missing range: " + ranges[r]);
@@ -146,7 +146,6 @@ namespace SheetBoardDev
                         sourceObject = new GameObject("Preview Source");
                         source = sourceObject.AddUdonSharpComponent<SheetBoardSource>();
                         source.language = SheetBoardLanguage.Japanese;
-                        display.language = SheetBoardLanguage.Japanese;
                         display.source = source;
                         if (!source.ApplyJson(stressJson) || source.GetRange(stressRanges[r]) == null)
                             throw new InvalidOperationException("Invalid stress sample or missing range: " + stressRanges[r]);
@@ -354,11 +353,121 @@ namespace SheetBoardDev
                 PrivateInvoke(source, "UpdateStatus");
             }
         }
+        private static void VerifyStatusIndicators(SheetBoardSource source, SheetBoardDisplay display)
+        {
+            bool oldHasSuccess = (bool)PrivateValue(source, "hasSuccess");
+            bool oldFailed = (bool)PrivateValue(source, "failed");
+            bool oldInFlight = (bool)PrivateValue(source, "inFlight");
+            bool oldManualPending = (bool)PrivateValue(source, "manualPending");
+            int oldValidUrlCount = (int)PrivateValue(source, "validUrlCount");
+            SheetBoardSource oldDisplaySource = display.source;
+            bool failed = false;
+            try
+            {
+                display.source = source;
+                PrivateSet(source, "hasSuccess", false);
+                PrivateSet(source, "failed", false);
+                PrivateSet(source, "inFlight", false);
+                PrivateSet(source, "manualPending", false);
+                PrivateSet(source, "validUrlCount", 1);
+                PrivateInvoke(source, "UpdateStatus");
+                if (source.GetStatusLevel() != 3)
+                {
+                    Debug.LogError("[SheetBoard] status violation: initial state must be preparing");
+                    failed = true;
+                }
+                PrivateInvoke(display, "RefreshIndicators", 0, false);
+                if (display.statusDot == null || display.statusDot.color != display.busyColor || display.statusDot.color.a != 1f)
+                {
+                    Debug.LogError("[SheetBoard] status violation: preparing indicator must use opaque busyColor");
+                    failed = true;
+                }
+                PrivateSet(source, "failed", true);
+                PrivateInvoke(source, "UpdateStatus");
+                if (source.GetStatusLevel() != 2)
+                {
+                    Debug.LogError("[SheetBoard] status violation: failed initial load must be an error");
+                    failed = true;
+                }
+                PrivateInvoke(display, "RefreshIndicators", 0, false);
+                if (display.statusDot == null || display.statusDot.color != display.errorColor)
+                {
+                    Debug.LogError("[SheetBoard] status violation: failed initial load must use errorColor");
+                    failed = true;
+                }
+                if (failed) throw new InvalidOperationException("Sheet Board status Preview checks failed.");
+                Debug.Log("[SheetBoard] Status indicators OK");
+            }
+            finally
+            {
+                display.source = oldDisplaySource;
+                PrivateSet(source, "hasSuccess", oldHasSuccess);
+                PrivateSet(source, "failed", oldFailed);
+                PrivateSet(source, "inFlight", oldInFlight);
+                PrivateSet(source, "manualPending", oldManualPending);
+                PrivateSet(source, "validUrlCount", oldValidUrlCount);
+                PrivateInvoke(source, "UpdateStatus");
+                if (display.source != null) PrivateInvoke(display, "RefreshIndicators", display.source.GetAccessStatus(), display.source.IsBusy());
+            }
+        }
         private static object PrivateValue(object target, string name)
         {
             FieldInfo field = target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic);
             if (field == null) throw new InvalidOperationException("Missing private field: " + name);
             return field.GetValue(target);
+        }
+        private static void VerifyRuntimeRegressions(SheetBoardDisplay display)
+        {
+            SheetBoardSource previous = display.source;
+            string previousRange = display.rangeName;
+            GameObject fixture = new GameObject("Runtime regression source");
+            try
+            {
+                SheetBoardSource test = fixture.AddUdonSharpComponent<SheetBoardSource>();
+                test.language = SheetBoardLanguage.Japanese;
+                PrivateInvoke(test, "ResolveLanguage");
+                PrivateSet(test, "validUrlCount", 1);
+                display.source = test;
+                display.rangeName = "";
+                PrivateInvoke(display, "ResolveLanguage");
+                PrivateSet(test, "failed", true);
+                PrivateSet(test, "errorCode", "timeout");
+                PrivateSet(test, "nextFetchAt", Time.realtimeSinceStartup + 30f);
+                PrivateInvoke(test, "UpdateStatus");
+                if (!test.GetStatusText().Contains("時間切れ")) throw new InvalidOperationException("Timeout wording failed.");
+                test.nearRadius = 10f;
+                PrivateSet(test, "nextFetchAt", 0f);
+                PrivateInvoke(test, "UpdateStatus");
+                if (test.GetStatusLevel() != 3 || test.GetStatusText() != "近づくと読み込みます") throw new InvalidOperationException("Proximity retry status failed.");
+                test.nearRadius = 0f;
+                if (!test.ApplyJson("{\"format\":\"sheetboard/1\",\"rev\":\"empty\",\"updatedUnix\":1,\"ranges\":{}}")) throw new InvalidOperationException("Empty ranges fixture rejected.");
+                display.RenderNow();
+                PrivateInvoke(display, "RefreshIndicators", 0, false);
+                if (display.statusText.text != "表示する範囲がまだありません" || display.statusDot.color != display.errorColor) throw new InvalidOperationException("Empty ranges status failed.");
+                StringBuilder rows = new StringBuilder();
+                for (int i = 0; i < 400; i++) { if (i > 0) rows.Append(','); rows.Append("[\"x\",\"\",\"\"]"); }
+                string large = "{\"format\":\"sheetboard/1\",\"rev\":\"large\",\"updatedUnix\":2,\"ranges\":{\"large\":{\"rows\":[" + rows + "]}}}";
+                if (!test.ApplyJson(large)) throw new InvalidOperationException("Large table fixture rejected.");
+                display.RenderNow();
+                PrivateInvoke(display, "RefreshIndicators", 0, false);
+                if (!display.statusText.text.Contains("表が大きく文字が小さくなっています") || display.statusDot.color != display.staleColor) throw new InvalidOperationException("Large table warning failed.");
+                float[] heights = (float[])PrivateValue(display, "workHs");
+                for (int i = 0; i < heights.Length; i++) if (heights[i] < 1f) throw new InvalidOperationException("Zero-height row.");
+                string chip = "{\"format\":\"sheetboard/1\",\"rev\":\"chip\",\"updatedUnix\":3,\"ranges\":{\"chip\":{\"cols\":[1,1,1],\"rows\":[[\"A very long sentence that must not cross into the dropdown\",\"\",\"\"]],\"chip\":[[\"\",\"a\",\"\"]]}}}";
+                if (!test.ApplyJson(chip)) throw new InvalidOperationException("Chip fixture rejected.");
+                display.RenderNow();
+                bool[] candidates = (bool[])PrivateValue(display, "workSpillCandidates");
+                bool[] overlays = (bool[])PrivateValue(display, "workOverlayUsed");
+                if (candidates[0] || overlays[0]) throw new InvalidOperationException("Text overflowed into an empty dropdown.");
+            }
+            finally
+            {
+                display.source = previous;
+                display.rangeName = previousRange;
+                PrivateInvoke(display, "ResolveLanguage");
+                display.RenderNow();
+                UnityEngine.Object.DestroyImmediate(fixture);
+            }
         }
         private static bool IsKnownOverflow(SheetBoardDisplay display, int row, int col)
         {
@@ -382,7 +491,6 @@ namespace SheetBoardDev
         {
             bool failed = false;
             SheetBoardLanguage oldSourceLanguage = source.language;
-            SheetBoardLanguage oldDisplayLanguage = display.language;
             SheetBoardSource oldDisplaySource = display.source;
             string oldUrlMissingText = source.urlMissingText;
             string oldPermissionDeniedText = source.permissionDeniedText;
@@ -391,39 +499,53 @@ namespace SheetBoardDev
             string oldRefreshIdleText = display.refreshIdleText;
             string oldRangeName = display.rangeName;
             source.language = SheetBoardLanguage.English;
-            display.language = SheetBoardLanguage.English;
             source.urlMissingText = "URLが設定されていません";
             PrivateInvoke(source, "ResolveLanguage");
             source.permissionDeniedText = "";
-            if (source.GetPermissionDeniedText() != "You don't have permission to view this.") { Debug.LogError("[SheetBoard] language violation: empty Source override"); failed = true; }
+            if (source.GetPermissionDeniedText() != "You don't have permission to view this") { Debug.LogError("[SheetBoard] language violation: empty Source override"); failed = true; }
             if (source.GetRefreshingSuffix() != " · updating…") { Debug.LogError("[SheetBoard] language violation: English refreshing suffix"); failed = true; }
             PrivateInvoke(source, "UpdateStatus");
-            if (source.GetStatusText() != "No URL is set.") { Debug.LogError("[SheetBoard] language violation: English Source status"); failed = true; }
+            if (source.GetStatusText() != "No URL is set") { Debug.LogError("[SheetBoard] language violation: English Source status"); failed = true; }
             source.urlMissingText = "Custom";
             PrivateInvoke(source, "UpdateStatus");
             if (source.GetStatusText() != "Custom") { Debug.LogError("[SheetBoard] language violation: custom Source override"); failed = true; }
             source.permissionDeniedText = "閲覧権限がありません";
-            if (source.GetPermissionDeniedText() != "You don't have permission to view this.") { Debug.LogError("[SheetBoard] language violation: legacy Source override"); failed = true; }
+            if (source.GetPermissionDeniedText() != "You don't have permission to view this") { Debug.LogError("[SheetBoard] language violation: legacy Source override"); failed = true; }
             display.rangeMissingText = "範囲「{name}」が見つかりません";
             display.sourceMissingText = "Sourceが設定されていません";
             display.refreshIdleText = "更新";
             display.source = null;
-            PrivateInvoke(display, "ResolveLanguage");
+            PrivateSet(display, "resolvedLanguage", SheetBoardLanguage.English);
+            PrivateSet(display, "languageResolved", true);
             PrivateInvoke(display, "RefreshIndicators", 2, false);
-            if (display.statusText == null || display.statusText.text != "No Source is set.") { Debug.LogError("[SheetBoard] language violation: English missing Source display"); failed = true; }
+            if (display.statusText == null || display.statusText.text != "No data source is set") { Debug.LogError("[SheetBoard] language violation: English missing Source display"); failed = true; }
             display.sourceMissingText = "Custom";
             PrivateInvoke(display, "RefreshIndicators", 2, false);
             if (display.statusText == null || display.statusText.text != "Custom") { Debug.LogError("[SheetBoard] language violation: custom Display override"); failed = true; }
             PrivateInvoke(display, "UpdateRefreshButton", 2, false);
             if (display.refreshLabel == null || display.refreshLabel.text != "Refresh") { Debug.LogError("[SheetBoard] language violation: English refresh button"); failed = true; }
+            // Auto on both sides needs VRCPlayerApi.GetCurrentLanguage, which throws in batchmode, so only the follow-the-Source paths are checked.
+            display.source = source;
+            display.refreshIdleText = "";
+            source.language = SheetBoardLanguage.Japanese;
+            PrivateInvoke(display, "ResolveLanguage");
+            PrivateInvoke(display, "UpdateRefreshButton", 2, false);
+            if (display.refreshLabel == null || display.refreshLabel.text != "更新") { Debug.LogError("[SheetBoard] language violation: Auto Display did not follow Japanese Source"); failed = true; }
+            source.language = SheetBoardLanguage.English;
+            PrivateInvoke(display, "ResolveLanguage");
+            PrivateInvoke(display, "UpdateRefreshButton", 2, false);
+            if (display.refreshLabel == null || display.refreshLabel.text != "Refresh") { Debug.LogError("[SheetBoard] language violation: Auto Display did not follow English Source"); failed = true; }
+            PrivateInvoke(display, "ResolveLanguage");
+            PrivateInvoke(display, "UpdateRefreshButton", 2, false);
+            display.refreshIdleText = "更新";
+            PrivateInvoke(display, "ResolveLanguage");
             display.source = source;
             display.rangeName = "language_missing";
             display.RenderNow();
-            if (display.titleText == null || display.titleText.text != "Range \"language_missing\" was not found.") { Debug.LogError("[SheetBoard] language violation: English missing range display"); failed = true; }
+            if (display.titleText == null || display.titleText.text != "Range \"language_missing\" was not found") { Debug.LogError("[SheetBoard] language violation: English missing range display"); failed = true; }
             source.language = oldSourceLanguage;
             source.urlMissingText = oldUrlMissingText;
             source.permissionDeniedText = oldPermissionDeniedText;
-            display.language = oldDisplayLanguage;
             display.source = oldDisplaySource;
             display.rangeMissingText = oldRangeMissingText;
             display.sourceMissingText = oldSourceMissingText;
@@ -825,7 +947,7 @@ namespace SheetBoardDev
                                 bool isColumn = textColumn >= 0;
                                 if (isColumn) overlayCol = textColumn;
                                 else OverlayCell(display, text, out overlayRow, out overlayCol);
-                                if (overlayCol != c || (!isColumn && overlayRow != r)) continue;
+                                if (isColumn ? overlayCol != c : (overlayRow != r || overlayCol > c)) continue;
                                 text.ForceMeshUpdate();
                                 TMP_CharacterInfo[] chars = text.textInfo.characterInfo;
                                 for (int k = 0; k < text.textInfo.characterCount && k < chars.Length; k++)
@@ -841,7 +963,7 @@ namespace SheetBoardDev
                                     visibleBottom = Mathf.Min(visibleBottom, a.y);
                                     visibleTop = Mathf.Max(visibleTop, glyphTop.y);
                                     hasVisibleGlyph = true;
-                                    if (Mathf.Min(a.x, b.x) < arrowRight && Mathf.Max(a.x, b.x) > arrowLeft && !IsKnownOverflow(display, r, c)) failed = true;
+                                    if (Mathf.Min(a.x, b.x) < arrowRight && Mathf.Max(a.x, b.x) > arrowLeft) failed = true;
                                 }
                             }
                             if (rangeName == "chips" && hasVisibleGlyph)

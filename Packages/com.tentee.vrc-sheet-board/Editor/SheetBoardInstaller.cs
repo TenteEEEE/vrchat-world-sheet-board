@@ -18,7 +18,15 @@ namespace SheetBoardEditor
 {
     public static partial class SheetBoardInstaller
     {
-        internal static string RootDir => AssetDatabase.IsValidFolder("Packages/com.tentee.vrc-sheet-board") ? "Packages/com.tentee.vrc-sheet-board/" : "Assets/SheetBoard/";
+        internal static string RootDir
+        {
+            get
+            {
+                string path = AssetDatabase.GUIDToAssetPath("f25bda302609d324ca7ec310a3b38160");
+                if (!string.IsNullOrEmpty(path)) return path.Substring(0, path.LastIndexOf('/') + 1);
+                return AssetDatabase.IsValidFolder("Packages/com.tentee.vrc-sheet-board") ? "Packages/com.tentee.vrc-sheet-board/" : "Assets/SheetBoard/";
+            }
+        }
         private static string SourcePath => RootDir + "Runtime/SheetBoardSource";
         private static string DisplayPath => RootDir + "Runtime/SheetBoardDisplay";
         private static string FontPath => RootDir + "Fonts/SheetBoard JP Dynamic.asset";
@@ -59,12 +67,6 @@ namespace SheetBoardEditor
             try
             {
             SheetBoardDisplay display = root.AddUdonSharpComponent<SheetBoardDisplay>();
-            display.lightTheme = lightTheme;
-            display.chipPalette = lightTheme
-                ? new Color[] { new Color32(0xF8, 0xD7, 0xDA, 0xFF), new Color32(0xFD, 0xE2, 0xC0, 0xFF), new Color32(0xFF, 0xF1, 0xB0, 0xFF), new Color32(0xD6, 0xF0, 0xCF, 0xFF), new Color32(0xCB, 0xED, 0xE7, 0xFF), new Color32(0xD2, 0xE4, 0xFB, 0xFF), new Color32(0xE1, 0xDA, 0xF6, 0xFF), new Color32(0xF6, 0xD6, 0xEA, 0xFF), new Color32(0xE8, 0xE1, 0xD2, 0xFF), new Color32(0xD8, 0xE0, 0xE7, 0xFF) }
-                : new Color[] { new Color32(0x7A, 0x2E, 0x3A, 0xFF), new Color32(0x7A, 0x4A, 0x16, 0xFF), new Color32(0x66, 0x57, 0x0F, 0xFF), new Color32(0x2F, 0x5E, 0x32, 0xFF), new Color32(0x1F, 0x5C, 0x56, 0xFF), new Color32(0x24, 0x49, 0x7A, 0xFF), new Color32(0x4A, 0x3B, 0x7A, 0xFF), new Color32(0x6E, 0x2E, 0x5C, 0xFF), new Color32(0x5A, 0x4E, 0x3A, 0xFF), new Color32(0x3C, 0x4A, 0x57, 0xFF) };
-            display.chipColor = lightTheme ? new Color32(0xE8, 0xEA, 0xED, 0xFF) : new Color32(0x3C, 0x40, 0x43, 0xFF);
-            display.chipArrowColor = lightTheme ? new Color32(0x5F, 0x63, 0x68, 0xFF) : new Color32(0x9A, 0xA0, 0xA6, 0xFF);
             display.showGrid = true;
             display.gridWidth = 1f;
             display.textScale = 1.4f;
@@ -118,6 +120,7 @@ namespace SheetBoardEditor
             Button button = CreateButton(canvas.transform, font, lightTheme);
             display.refreshButton = button;
             display.refreshLabel = button.GetComponentInChildren<TMP_Text>();
+            ApplyTheme(display, lightTheme);
             SetEdges(button.GetComponent<RectTransform>(), new Vector2(1, 0), new Vector2(1, 0), new Vector2(-220, 15), new Vector2(-40, 65));
             UnityEventTools.AddStringPersistentListener(button.onClick, UdonSharpEditorUtility.GetBackingUdonBehaviour(display).SendCustomEvent, "OnRefreshPressed");
             ApplyMaterials(root, font, ui, tmp);
@@ -149,12 +152,16 @@ namespace SheetBoardEditor
             return path;
         }
 
-        [MenuItem("Tools/TenteEEEE/Sheet Board/Install Sample into Current Scene")]
+        [MenuItem("Tools/TenteEEEE/Sheet Board/掲示板をシーンに置く")]
         public static void InstallSampleMenu()
         {
             if (Shader.Find("TextMeshPro/Mobile/Distance Field") == null)
             {
-                EditorUtility.DisplayDialog("Sheet Board", "TextMesh Pro Essential Resources をインポートしてください。", "OK");
+                if (EditorUtility.DisplayDialog("Sheet Board", "TextMesh Pro Essential Resources がありません。インポートしますか？", "インポートする", "キャンセル"))
+                {
+                    TMPro.TMP_PackageResourceImporter.ImportResources(true, false, false);
+                    EditorUtility.DisplayDialog("Sheet Board", "インポートが終わったら、もう一度「掲示板をシーンに置く」を実行してください。", "OK");
+                }
                 return;
             }
             if (AssetDatabase.LoadAssetAtPath<GameObject>(SourcePrefab) == null || AssetDatabase.LoadAssetAtPath<GameObject>(DisplayPrefab) == null)
@@ -166,14 +173,40 @@ namespace SheetBoardEditor
             Scene scene = SceneManager.GetActiveScene();
             SheetBoardSource[] sources = Object.FindObjectsByType<SheetBoardSource>(FindObjectsInactive.Include, FindObjectsSortMode.None);
             SheetBoardSource source = null;
-            foreach (SheetBoardSource candidate in sources) if (candidate.gameObject.scene == scene) { source = candidate; break; }
+            int sourceCount = 0;
+            foreach (SheetBoardSource candidate in sources)
+                if (candidate.gameObject.scene == scene && candidate.gameObject.activeInHierarchy && candidate.enabled)
+                { if (source == null) source = candidate; sourceCount++; }
+            if (sourceCount > 1) Debug.Log("データ元が複数あるため『" + source.gameObject.name + "』につなぎました", source);
             if (source == null) source = InstantiatePrefab(SourcePrefab, scene).GetComponent<SheetBoardSource>();
             GameObject board = InstantiatePrefab(DisplayPrefab, scene);
-            float x = 0f;
-            foreach (SheetBoardDisplay existing in Object.FindObjectsByType<SheetBoardDisplay>(FindObjectsInactive.Include, FindObjectsSortMode.None))
-                if (existing != null && existing.gameObject != board && existing.gameObject.scene == scene)
-                    x = Mathf.Max(x, existing.transform.position.x + 2f);
-            board.transform.position = new Vector3(x, 1.5f, 0);
+            SceneView sceneView = SceneView.lastActiveSceneView;
+            if (sceneView != null)
+            {
+                board.transform.position = sceneView.pivot;
+                board.transform.rotation = Quaternion.Euler(0f, sceneView.camera.transform.eulerAngles.y, 0f);
+                Canvas canvas = board.GetComponentInChildren<Canvas>(true);
+                float width = canvas == null ? 1.6f : ((RectTransform)canvas.transform).rect.width * Mathf.Abs(canvas.transform.lossyScale.x);
+                SheetBoardDisplay[] existingBoards = Object.FindObjectsByType<SheetBoardDisplay>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+                for (int attempt = 0; attempt < 10; attempt++)
+                {
+                    bool occupied = false;
+                    foreach (SheetBoardDisplay existing in existingBoards)
+                        if (existing != null && existing.gameObject != board && existing.gameObject.scene == scene &&
+                            Vector3.Distance(existing.transform.position, board.transform.position) < width)
+                        { occupied = true; break; }
+                    if (!occupied) break;
+                    board.transform.position += Vector3.right * width;
+                }
+            }
+            else
+            {
+                float x = 0f;
+                foreach (SheetBoardDisplay existing in Object.FindObjectsByType<SheetBoardDisplay>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+                    if (existing != null && existing.gameObject != board && existing.gameObject.scene == scene)
+                        x = Mathf.Max(x, existing.transform.position.x + 2f);
+                board.transform.position = new Vector3(x, 1.5f, 0);
+            }
             SheetBoardDisplay display = board.GetComponent<SheetBoardDisplay>();
             RecordProxyUndo(display, "Configure Sheet Board Display");
             display.source = source;
@@ -182,10 +215,10 @@ namespace SheetBoardEditor
             PrefabUtility.RecordPrefabInstancePropertyModifications(display);
             EditorSceneManager.MarkSceneDirty(scene);
             Selection.activeGameObject = board;
-            Debug.Log("[SheetBoard] Sample installed into current scene.", board);
+            Debug.Log("[SheetBoard] 掲示板をシーンに置きました。", board);
         }
 
-        [MenuItem("Tools/TenteEEEE/Sheet Board/Install Sample into Current Scene", true)]
+        [MenuItem("Tools/TenteEEEE/Sheet Board/掲示板をシーンに置く", true)]
         private static bool ValidateInstallSample() { return !EditorApplication.isPlayingOrWillChangePlaymode; }
 
         private static GameObject InstantiatePrefab(string path, Scene scene)
@@ -193,15 +226,15 @@ namespace SheetBoardEditor
             GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
             if (prefab == null) throw new System.InvalidOperationException("Missing prefab: " + path);
             GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab, scene);
-            Undo.RegisterCreatedObjectUndo(instance, "Install Sheet Board Sample");
+            Undo.RegisterCreatedObjectUndo(instance, "Install Sheet Board");
             return instance;
         }
 
         private static bool AllProgramsCompiled()
         {
-            foreach (string path in new[] { SourcePath, DisplayPath })
+            foreach (System.Type type in new[] { typeof(SheetBoardSource), typeof(SheetBoardDisplay) })
             {
-                UdonSharpProgramAsset asset = AssetDatabase.LoadAssetAtPath<UdonSharpProgramAsset>(path + ".asset");
+                UdonSharpProgramAsset asset = UdonSharpProgramAsset.GetProgramAssetForClass(type);
                 if (asset == null || asset.GetRealProgram() == null) return false;
             }
             return true;
@@ -211,8 +244,34 @@ namespace SheetBoardEditor
             if (!UdonSharpProgramAsset.AnyUdonSharpScriptHasError() && AllProgramsCompiled()) return true;
             UdonSharpCompilerV1.CompileSync(new UdonSharpCompileOptions { IsEditorBuild = true });
             if (!UdonSharpProgramAsset.AnyUdonSharpScriptHasError() && AllProgramsCompiled()) return true;
-            EditorUtility.DisplayDialog("Sheet Board", "UdonSharp のコンパイルエラーがあります（Sheet Board 以外のスクリプトのエラーでも止まります）。Console のエラーを直してから、もう一度実行してください。", "OK");
+            EditorUtility.DisplayDialog("Sheet Board", ProgramFailureMessage(), "OK");
             return false;
+        }
+        internal static bool ProgramsCompiledQuiet() => !UdonSharpProgramAsset.AnyUdonSharpScriptHasError() && AllProgramsCompiled();
+        internal static string ProgramFailureMessage() => UdonSharpProgramAsset.AnyUdonSharpScriptHasError()
+            ? "UdonSharp のコンパイルエラーがあります（Sheet Board 以外のスクリプトのエラーでも止まります）。Console のエラーを直してから、もう一度実行してください。"
+            : "Sheet Board のプログラムが見つかりません。Unity を再起動するか、パッケージを入れ直してください。";
+
+        internal static void ApplyTheme(SheetBoardDisplay display, bool lightTheme)
+        {
+            if (display == null) return;
+            display.lightTheme = lightTheme;
+            display.chipPalette = lightTheme
+                ? new Color[] { new Color32(0xF8, 0xD7, 0xDA, 0xFF), new Color32(0xFD, 0xE2, 0xC0, 0xFF), new Color32(0xFF, 0xF1, 0xB0, 0xFF), new Color32(0xD6, 0xF0, 0xCF, 0xFF), new Color32(0xCB, 0xED, 0xE7, 0xFF), new Color32(0xD2, 0xE4, 0xFB, 0xFF), new Color32(0xE1, 0xDA, 0xF6, 0xFF), new Color32(0xF6, 0xD6, 0xEA, 0xFF), new Color32(0xE8, 0xE1, 0xD2, 0xFF), new Color32(0xD8, 0xE0, 0xE7, 0xFF) }
+                : new Color[] { new Color32(0x7A, 0x2E, 0x3A, 0xFF), new Color32(0x7A, 0x4A, 0x16, 0xFF), new Color32(0x66, 0x57, 0x0F, 0xFF), new Color32(0x2F, 0x5E, 0x32, 0xFF), new Color32(0x1F, 0x5C, 0x56, 0xFF), new Color32(0x24, 0x49, 0x7A, 0xFF), new Color32(0x4A, 0x3B, 0x7A, 0xFF), new Color32(0x6E, 0x2E, 0x5C, 0xFF), new Color32(0x5A, 0x4E, 0x3A, 0xFF), new Color32(0x3C, 0x4A, 0x57, 0xFF) };
+            display.chipColor = lightTheme ? new Color32(0xE8, 0xEA, 0xED, 0xFF) : new Color32(0x3C, 0x40, 0x43, 0xFF);
+            display.chipArrowColor = lightTheme ? new Color32(0x5F, 0x63, 0x68, 0xFF) : new Color32(0x9A, 0xA0, 0xA6, 0xFF);
+            if (display.background != null) display.background.color = lightTheme ? Color.white : new Color32(0x12, 0x16, 0x1C, 0xFF);
+            Color text = lightTheme ? new Color32(0x20, 0x21, 0x24, 0xFF) : new Color32(0xE8, 0xED, 0xF2, 0xFF);
+            if (display.titleText != null) display.titleText.color = text;
+            if (display.statusText != null) display.statusText.color = text;
+            if (display.statusDot != null) display.statusDot.color = lightTheme ? new Color32(0xD9, 0x30, 0x25, 0xFF) : new Color32(0xF2, 0x8B, 0x82, 0xFF);
+            if (display.refreshButton != null)
+            {
+                Image image = display.refreshButton.GetComponent<Image>();
+                if (image != null) image.color = lightTheme ? new Color32(0x0F, 0x76, 0x6E, 0xFF) : new Color32(0x1F, 0x6F, 0x69, 0xFF);
+            }
+            if (display.refreshLabel != null) display.refreshLabel.color = lightTheme ? new Color32(0xFF, 0xFF, 0xFF, 0xFF) : new Color32(0xF1, 0xF5, 0xF7, 0xFF);
         }
         private static void EnsureProgramAssets()
         {

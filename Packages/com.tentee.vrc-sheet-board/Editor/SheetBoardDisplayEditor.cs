@@ -3,11 +3,13 @@ using System;
 using SheetBoard;
 using UdonSharpEditor;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 
 namespace SheetBoardEditor
 {
     [CustomEditor(typeof(SheetBoardDisplay))]
+    [CanEditMultipleObjects]
     public class SheetBoardDisplayEditor : Editor
     {
         private bool showLayout;
@@ -39,10 +41,38 @@ namespace SheetBoardEditor
             serializedObject.Update();
             SheetBoardDisplay display = (SheetBoardDisplay)target;
             EditorGUILayout.LabelField("基本設定", EditorStyles.boldLabel);
+            if (targets.Length > 1) EditorGUILayout.HelpBox("複数選択中は表示しません", MessageType.Info);
+            else if (display.source != null)
+            {
+                SheetBoardSourceEditor.DrawUrlSection(display.source);
+                int shared = 0;
+                foreach (SheetBoardDisplay other in UnityEngine.Object.FindObjectsByType<SheetBoardDisplay>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+                    if (other.source == display.source && other.gameObject.scene.IsValid() && other.gameObject.scene.isLoaded) shared++;
+                if (shared > 1) EditorGUILayout.LabelField("このデータ元を使う掲示板（" + shared + " 枚）すべてに反映されます", EditorStyles.miniLabel);
+            }
             EditorGUILayout.PropertyField(serializedObject.FindProperty("source"), Label("source"));
-            EditorGUILayout.PropertyField(serializedObject.FindProperty("language"), new GUIContent("表示言語（自動 = 見る人の VRChat の言語）"));
-            DrawRange(serializedObject.FindProperty("rangeName"));
-            if (display.source == null)
+            if (targets.Length == 1) DrawRange(serializedObject.FindProperty("rangeName"));
+            else EditorGUILayout.PropertyField(serializedObject.FindProperty("rangeName"), new GUIContent("表示する範囲"));
+            if (targets.Length > 1)
+            {
+                GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(SheetBoardInstaller.SourcePrefab);
+                bool canCreate = PrefabStageUtility.GetCurrentPrefabStage() == null;
+                foreach (SheetBoardDisplay selected in targets) if (!selected.gameObject.scene.IsValid()) canCreate = false;
+                if (canCreate && prefab == null) EditorGUILayout.HelpBox("Sheet Board の部品が見つかりません。パッケージを入れ直してください。", MessageType.Warning);
+                using (new EditorGUI.DisabledScope(prefab == null))
+                if (canCreate && GUILayout.Button("データ元を作ってつなぐ"))
+                {
+                    serializedObject.ApplyModifiedProperties();
+                    if (SheetBoardInstaller.CheckProgramsCompiled()) foreach (SheetBoardDisplay selected in targets)
+                    {
+                        GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab, selected.gameObject.scene);
+                        Undo.RegisterCreatedObjectUndo(instance, "Create Sheet Board Source");
+                        AssignSource(selected, instance.GetComponent<SheetBoardSource>());
+                    }
+                    GUIUtility.ExitGUI();
+                }
+            }
+            if (display.source == null && targets.Length == 1)
             {
                 SheetBoardSource only = null;
                 int count = 0;
@@ -52,34 +82,67 @@ namespace SheetBoardEditor
                     only = source;
                     count++;
                 }
-                if (count == 1 && GUILayout.Button("同じシーンの Source を自動設定"))
+                if (count == 1 && GUILayout.Button("同じシーンのデータ元につなぐ"))
                 {
                     serializedObject.ApplyModifiedProperties();
                     EditorApplication.delayCall += () => AssignSource(display, only);
                     GUIUtility.ExitGUI();
                 }
-                if (count > 1)
-                    EditorGUILayout.HelpBox("Source が複数あります。自動選択しないため、上の欄で指定してください。", MessageType.Info);
-                if (count == 0)
-                    EditorGUILayout.HelpBox("Source が未設定です。Source を作成するか、上の欄で指定してください。", MessageType.Info);
+                if (count > 1) EditorGUILayout.HelpBox("データ元が複数あります。上の欄で選んでください。", MessageType.Warning);
+                GameObject sourcePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(SheetBoardInstaller.SourcePrefab);
+                bool canCreate = display.gameObject.scene.IsValid() && PrefabStageUtility.GetCurrentPrefabStage() == null;
+                if (count == 0 && canCreate && sourcePrefab == null)
+                    EditorGUILayout.HelpBox("Sheet Board の部品が見つかりません。パッケージを入れ直してください。", MessageType.Warning);
+                using (new EditorGUI.DisabledScope(sourcePrefab == null))
+                if (count == 0 && canCreate && GUILayout.Button("データ元を作ってつなぐ"))
+                {
+                    serializedObject.ApplyModifiedProperties();
+                    if (SheetBoardInstaller.CheckProgramsCompiled())
+                    {
+                        GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(sourcePrefab, display.gameObject.scene);
+                        Undo.RegisterCreatedObjectUndo(instance, "Create Sheet Board Source");
+                        AssignSource(display, instance.GetComponent<SheetBoardSource>());
+                    }
+                    GUIUtility.ExitGUI();
+                }
             }
-            else if (GUILayout.Button("Source Inspector を開く")) Selection.activeObject = display.source;
-            EditorGUILayout.HelpBox("範囲名が空欄の場合、Source の先頭の範囲を表示します。", MessageType.None);
+            else if (targets.Length == 1 && display.source != null && GUILayout.Button("データ元の詳細設定を開く", EditorStyles.miniButton)) Selection.activeObject = display.source;
             serializedObject.ApplyModifiedProperties();
+            DrawBoardSize(display);
+            SerializedProperty themeProperty = serializedObject.FindProperty("lightTheme");
+            int theme = themeProperty.boolValue ? 0 : 1;
+            EditorGUI.showMixedValue = themeProperty.hasMultipleDifferentValues;
+            EditorGUI.BeginChangeCheck();
+            theme = EditorGUILayout.Popup("テーマ", theme, new[] { "ライト", "ダーク" });
+            bool themeChanged = EditorGUI.EndChangeCheck();
+            EditorGUI.showMixedValue = false;
+            if (themeChanged)
+            {
+                serializedObject.ApplyModifiedProperties();
+                foreach (SheetBoardDisplay selected in targets)
+                {
+                SheetBoardInstaller.RecordProxyUndo(selected, "Change Sheet Board Theme");
+                // The theme also recolours child graphics; record them so Undo and prefab overrides keep the change.
+                UnityEngine.Object[] themed = ThemedObjects(selected);
+                if (themed.Length > 0) Undo.RecordObjects(themed, "Change Sheet Board Theme");
+                SheetBoardInstaller.ApplyTheme(selected, theme == 0);
+                UdonSharpEditorUtility.CopyProxyToUdon(selected);
+                EditorUtility.SetDirty(selected);
+                if (PrefabUtility.IsPartOfPrefabInstance(selected)) PrefabUtility.RecordPrefabInstancePropertyModifications(selected);
+                foreach (UnityEngine.Object item in themed) RecordSizeChange(item);
+                }
+                serializedObject.Update();
+            }
             showLayout = EditorGUILayout.Foldout(showLayout, "表示とレイアウト（任意）", true);
             if (showLayout)
             {
-                Draw("lightTheme");
                 Draw("textScale");
                 Draw("autoFitColumns");
                 Draw("showTitle");
                 Draw("showGrid");
                 Draw("zebra");
-                Draw("maxRowHeight");
-                using (new EditorGUI.DisabledScope(serializedObject.FindProperty("showGrid").boolValue))
-                    Draw("columnGap");
             }
-            showColors = EditorGUILayout.Foldout(showColors, "色（任意）", true);
+            showColors = EditorGUILayout.Foldout(showColors, "色のカスタマイズ（任意。未設定ならテーマの色）", true);
             if (showColors)
             {
                 EditorGUILayout.PropertyField(serializedObject.FindProperty("chipAutoPalette"), new GUIContent("チップを名前ごとに色分け", "シートから色が読めないチップに、同じ名前なら同じ色を自動で付けます"));
@@ -100,7 +163,7 @@ namespace SheetBoardEditor
                 Draw("refreshDisabledColor");
                 Draw("refreshDisabledLabelColor");
             }
-            showTexts = EditorGUILayout.Foldout(showTexts, "文言の上書き（空欄なら表示言語の既定文言）", true);
+            showTexts = EditorGUILayout.Foldout(showTexts, "表示言語と文言（任意）", true);
             if (showTexts)
             {
                 Draw("rangeMissingText");
@@ -110,8 +173,10 @@ namespace SheetBoardEditor
             showAdvanced = EditorGUILayout.Foldout(showAdvanced, "詳細設定", true);
             if (showAdvanced)
             {
+                Draw("maxRowHeight");
                 using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("showGrid").boolValue)) Draw("gridWidth");
                 Draw("nearCheckInterval");
+                using (new EditorGUI.DisabledScope(serializedObject.FindProperty("showGrid").boolValue)) Draw("columnGap");
             }
             showInternal = EditorGUILayout.Foldout(showInternal, "内部参照（通常は変更不要）", true);
             if (showInternal)
@@ -133,6 +198,95 @@ namespace SheetBoardEditor
             }
             serializedObject.ApplyModifiedProperties();
         }
+
+        private void DrawBoardSize(SheetBoardDisplay display)
+        {
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("掲示板のサイズ", EditorStyles.boldLabel);
+            Canvas canvas = display.tableArea != null
+                ? display.tableArea.GetComponentInParent<Canvas>(true)
+                : display.GetComponentInChildren<Canvas>(true);
+            if (canvas == null || canvas.renderMode != RenderMode.WorldSpace)
+            {
+                EditorGUILayout.HelpBox("サイズ調整には、ワールド空間の Canvas が必要です。", MessageType.Info);
+                return;
+            }
+
+            RectTransform rect = (RectTransform)canvas.transform;
+            Vector2 size = rect.rect.size;
+            using (new EditorGUI.DisabledScope(EditorApplication.isPlayingOrWillChangePlaymode))
+            {
+                Vector3 scale = rect.lossyScale;
+                float sx = Mathf.Abs(scale.x), sy = Mathf.Abs(scale.y);
+                using (new EditorGUI.DisabledScope(sx < 0.000001f || sy < 0.000001f))
+                {
+                EditorGUI.BeginChangeCheck();
+                float width = EditorGUILayout.DelayedFloatField(new GUIContent("幅（m）", "最小 " + (640f * sx).ToString("0.###") + " m。背景・表の領域・当たり判定も一緒に調整します。"), size.x * sx);
+                float height = EditorGUILayout.DelayedFloatField(new GUIContent("高さ（m）", "最小 " + (320f * sy).ToString("0.###") + " m。縦長の表は高さを大きくしてください。"), size.y * sy);
+                bool changed = EditorGUI.EndChangeCheck();
+                EditorGUILayout.BeginHorizontal();
+                if (GUILayout.Button("横長（標準）")) { width = 1600f * sx; height = 1000f * sy; changed = true; }
+                if (GUILayout.Button("縦長")) { width = 1000f * sx; height = 1800f * sy; changed = true; }
+                if (GUILayout.Button("正方形")) { width = 1200f * sx; height = 1200f * sy; changed = true; }
+                EditorGUILayout.EndHorizontal();
+                if (changed && !float.IsNaN(width) && !float.IsInfinity(width)
+                    && !float.IsNaN(height) && !float.IsInfinity(height))
+                    foreach (SheetBoardDisplay selected in targets)
+                    {
+                        Canvas selectedCanvas = selected.tableArea != null ? selected.tableArea.GetComponentInParent<Canvas>(true) : selected.GetComponentInChildren<Canvas>(true);
+                        if (selectedCanvas == null || selectedCanvas.renderMode != RenderMode.WorldSpace) continue;
+                        Vector3 selectedScale = selectedCanvas.transform.lossyScale;
+                        float x = Mathf.Abs(selectedScale.x), y = Mathf.Abs(selectedScale.y);
+                        if (x < 0.000001f || y < 0.000001f) continue;
+                        ApplyBoardSize(selectedCanvas, new Vector2(Mathf.Max(640f, width / x), Mathf.Max(320f, height / y)));
+                    }
+                }
+            }
+            EditorGUILayout.HelpBox("形を変えるときはここで指定します。全体を大きく・小さくするときは、オブジェクトのスケールを変えてください。表全体が板に収まるので、行が多い表は高さを増やすか、範囲を分けて複数の掲示板に出してください。", MessageType.None);
+        }
+
+        internal static void ApplyBoardSize(Canvas canvas, Vector2 size)
+        {
+            RectTransform rect = (RectTransform)canvas.transform;
+            BoxCollider collider = canvas.GetComponent<BoxCollider>();
+            const string undoName = "Resize Sheet Board";
+            Undo.RecordObject(rect, undoName);
+            if (collider != null) Undo.RecordObject(collider, undoName);
+            rect.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, size.x);
+            rect.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, size.y);
+            if (collider != null)
+            {
+                collider.size = new Vector3(size.x, size.y, collider.size.z);
+                collider.center = new Vector3((0.5f - rect.pivot.x) * size.x, (0.5f - rect.pivot.y) * size.y, collider.center.z);
+                RecordSizeChange(collider);
+            }
+            RecordSizeChange(rect);
+            SceneView.RepaintAll();
+        }
+
+        private static UnityEngine.Object[] ThemedObjects(SheetBoardDisplay display)
+        {
+            System.Collections.Generic.List<UnityEngine.Object> items = new System.Collections.Generic.List<UnityEngine.Object>();
+            if (display.background != null) items.Add(display.background);
+            if (display.titleText != null) items.Add(display.titleText);
+            if (display.statusText != null) items.Add(display.statusText);
+            if (display.statusDot != null) items.Add(display.statusDot);
+            if (display.refreshLabel != null) items.Add(display.refreshLabel);
+            if (display.refreshButton != null)
+            {
+                UnityEngine.UI.Image image = display.refreshButton.GetComponent<UnityEngine.UI.Image>();
+                if (image != null) items.Add(image);
+            }
+            return items.ToArray();
+        }
+
+        private static void RecordSizeChange(UnityEngine.Object component)
+        {
+            EditorUtility.SetDirty(component);
+            if (PrefabUtility.IsPartOfPrefabInstance(component))
+                PrefabUtility.RecordPrefabInstancePropertyModifications(component);
+        }
+
         private static void AssignSource(SheetBoardDisplay display, SheetBoardSource source)
         {
             if (!SheetBoardInstaller.CheckProgramsCompiled()) return;
@@ -154,35 +308,26 @@ namespace SheetBoardEditor
             SerializedProperty sourceProperty = serializedObject.FindProperty("source");
             SheetBoardSource source = sourceProperty.objectReferenceValue as SheetBoardSource;
             string[] ranges = SheetBoardSourceEditor.GetRanges(source);
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.PropertyField(property, new GUIContent("範囲名"));
             if (ranges.Length > 0)
             {
-                string[] choices = new string[ranges.Length + 1];
-                choices[0] = "選択…";
+                int missing = Array.IndexOf(ranges, property.stringValue) < 0 && !string.IsNullOrEmpty(property.stringValue) ? 1 : 0;
+                string[] choices = new string[ranges.Length + 1 + missing];
+                choices[0] = "（自動: 一番上の範囲）";
                 Array.Copy(ranges, 0, choices, 1, ranges.Length);
-                int selected = EditorGUILayout.Popup(0, choices, GUILayout.Width(130));
-                if (selected > 0) property.stringValue = ranges[selected - 1];
+                if (missing != 0) choices[choices.Length - 1] = property.stringValue + "（シートにありません）";
+                int selected = string.IsNullOrEmpty(property.stringValue) ? 0 : Array.IndexOf(ranges, property.stringValue) + 1;
+                if (missing != 0 && selected == 0) selected = choices.Length - 1;
+                selected = EditorGUILayout.Popup(new GUIContent("表示する範囲", "シートの設定タブ A 列「名前」です"), selected, choices);
+                property.stringValue = selected == 0 ? "" : (missing != 0 && selected == choices.Length - 1 ? property.stringValue : ranges[selected - 1]);
+                if (missing != 0) EditorGUILayout.HelpBox("「" + property.stringValue + "」はシートに見つかりません。シートの設定タブ A 列「名前」と同じ文字にしてください。", MessageType.Warning);
             }
-            EditorGUILayout.EndHorizontal();
-            if (ranges.Length > 0)
-            {
-                EditorGUILayout.BeginHorizontal();
-                GUILayout.FlexibleSpace();
-                int selectedIndex = Array.IndexOf(ranges, property.stringValue);
-                string rangeStatus = string.IsNullOrEmpty(property.stringValue)
-                    ? "（空欄 = 最初の範囲）"
-                    : selectedIndex < 0 ? "未確認の範囲名" : "確認済みの範囲名";
-                EditorGUILayout.LabelField(rangeStatus, EditorStyles.miniLabel, GUILayout.Width(150));
-                EditorGUILayout.EndHorizontal();
-            }
+            else EditorGUILayout.PropertyField(property, new GUIContent("表示する範囲", "シートの設定タブ A 列「名前」です。空欄なら一番上の範囲"));
         }
         private static GUIContent Label(string name)
         {
             switch (name)
             {
                 case "source": return new GUIContent("データ元");
-                case "lightTheme": return new GUIContent("明るいテーマ（シート風）");
                 case "boardColor": return new GUIContent("板の色");
                 case "gridColor": return new GUIContent("格子の色");
                 case "showGrid": return new GUIContent("格子を表示");
@@ -207,7 +352,7 @@ namespace SheetBoardEditor
                 case "refreshLabel": return new GUIContent("更新ボタンの文字");
                 case "refreshIdleText": return new GUIContent("更新ボタンの文言");
                 case "rangeMissingText": return new GUIContent("範囲が見つからないとき");
-                case "sourceMissingText": return new GUIContent("Source がないとき");
+                case "sourceMissingText": return new GUIContent("データ元がないとき");
                 case "bodyColor": return new GUIContent("本文の色");
                 case "headerBackgroundColor": return new GUIContent("見出し背景の色");
                 case "zebraColor": return new GUIContent("交互の行背景色");

@@ -10,6 +10,7 @@
         "UdonSharp.Runtime",
         "VRC.SDK3",
         "VRC.SDKBase",
+        "VRC.SDKBase.Editor.BuildPipeline",
         "VRC.Udon"
     ],
     "includePlatforms": [

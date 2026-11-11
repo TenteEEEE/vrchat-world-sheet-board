@@ -20,26 +20,30 @@ namespace SheetBoard
         private const float MaximumBackoff = 300f;
         private const float Timeout = 60f;
         private const float RetireSeconds = 2f * Timeout;
+        // Paired with the Apps Script 60-minute heartbeat.
+        private const float StaleMinutes = 90f;
+        private const float ManualCooldown = 5f;
+        private const float StartDelayMax = 3f;
         private const double MaximumUnix = 253402300799d;
         private const double SecondsPerMinute = 60d;
         private const double MinutesPerHour = 60d;
         private const double MinutesPerDay = 1440d;
         private const string JapanesePermissionDeniedText = "閲覧権限がありません";
-        private const string EnglishPermissionDeniedText = "You don't have permission to view this.";
+        private const string EnglishPermissionDeniedText = "You don't have permission to view this";
         private const string JapanesePermissionWaitingText = "権限を確認中…";
         private const string EnglishPermissionWaitingText = "Checking permission…";
         private const string JapaneseUrlMissingText = "URLが設定されていません";
-        private const string EnglishUrlMissingText = "No URL is set.";
+        private const string EnglishUrlMissingText = "No URL is set";
         private const string JapaneseLoadingText = "読み込み中…";
         private const string EnglishLoadingText = "Loading…";
         private const string JapaneseWaitingNearText = "近づくと読み込みます";
-        private const string EnglishWaitingNearText = "Come closer to load.";
+        private const string EnglishWaitingNearText = "Come closer to load";
         private const string JapaneseFailedText = "読み込めません・{s}秒後に再試行（{code}）";
         private const string EnglishFailedText = "Couldn't load · retrying in {s}s ({code})";
         private const string JapaneseFreshText = "更新 {time}（{ago}）";
         private const string EnglishFreshText = "Updated {time} ({ago})";
-        private const string JapaneseStaleText = "更新 {time}（{ago}）・自動公開が止まっています";
-        private const string EnglishStaleText = "Updated {time} ({ago}) · auto-publish has stopped";
+        private const string JapaneseStaleText = "更新 {time}（{ago}）・更新が止まっている可能性があります";
+        private const string EnglishStaleText = "Updated {time} ({ago}) · may be out of date";
         private const string JapaneseRetryText = "更新 {time}（{ago}）・再試行中";
         private const string EnglishRetryText = "Updated {time} ({ago}) · retrying";
         private const string JapaneseRefreshingSuffix = "・更新中…";
@@ -55,9 +59,6 @@ namespace SheetBoard
         public string baseUrl = "";
         public float refreshInterval = 60f;
         public float nearRadius = 0f;
-        public float staleMinutes = 90f;
-        public float manualCooldown = 5f;
-        public float startDelayMax = 3f;
         public SheetBoardAudience audience = SheetBoardAudience.Public;
         public SheetBoardLanguage language = SheetBoardLanguage.Auto;
         public UdonBehaviour permissionController;
@@ -119,7 +120,7 @@ namespace SheetBoard
             if (!initialized)
             {
                 initialized = true;
-                nextFetchAt = now + UnityEngine.Random.Range(0f, Mathf.Max(0f, startDelayMax));
+                nextFetchAt = now + UnityEngine.Random.Range(0f, Mathf.Max(0f, StartDelayMax));
                 if (urls != null && urls.Length > 0)
                 {
                     urlIndex = UnityEngine.Random.Range(0, urls.Length);
@@ -157,8 +158,20 @@ namespace SheetBoard
         {
             if (!languageResolved) ResolveLanguage();
             if (string.IsNullOrEmpty(value)) return resolvedLanguage == SheetBoardLanguage.Japanese ? japanese : english;
-            if (value == japanese) return resolvedLanguage == SheetBoardLanguage.Japanese ? japanese : english;
+            if (value == japanese || value == "更新 {time}（{ago}）・自動公開が止まっています" || value == "Updated {time} ({ago}) · auto-publish has stopped" || value == "You don't have permission to view this." || value == "No URL is set." || value == "Come closer to load.") return resolvedLanguage == SheetBoardLanguage.Japanese ? japanese : english;
             return value;
+        }
+
+        public SheetBoardLanguage GetResolvedLanguage() { ResolveLanguage(); return resolvedLanguage; }
+
+        private string GetErrorDescription()
+        {
+            bool japanese = GetResolvedLanguage() == SheetBoardLanguage.Japanese;
+            if (errorCode == "timeout") return japanese ? "時間切れ" : "timed out";
+            if (errorCode == "JSON") return japanese ? "データの形式が不正" : "invalid data";
+            bool digits = errorCode.Length > 0;
+            for (int i = 0; i < errorCode.Length; i++) if (errorCode[i] < '0' || errorCode[i] > '9') digits = false;
+            return digits ? "HTTP " + errorCode : errorCode;
         }
 
         public string GetPermissionDeniedText() { return ResolveText(permissionDeniedText, JapanesePermissionDeniedText, EnglishPermissionDeniedText); }
@@ -231,7 +244,7 @@ namespace SheetBoard
             EvaluatePermission();
             if (!HasPermission() || validUrlCount == 0) return;
             float now = Time.realtimeSinceStartup;
-            if (inFlight || (hasManual && now - lastManualAt < manualCooldown)) return;
+            if (inFlight || (hasManual && now - lastManualAt < ManualCooldown)) return;
             hasManual = true;
             lastManualAt = now;
             manualPending = true;
@@ -246,7 +259,7 @@ namespace SheetBoard
             if (!HasPermission() || validUrlCount == 0 || inFlight) return -1f;
             if (hasManual)
             {
-                float remaining = manualCooldown - (Time.realtimeSinceStartup - lastManualAt);
+                float remaining = ManualCooldown - (Time.realtimeSinceStartup - lastManualAt);
                 if (remaining > 0f) return remaining;
             }
             return 0f;
@@ -361,6 +374,7 @@ namespace SheetBoard
         }
 
         public bool HasData() { return HasPermission() && hasSuccess; }
+        public bool HasNoRanges() { return HasPermission() && ranges != null && ranges.Count == 0; }
         public int GetRevision() { return revision; }
 
         public DataDictionary GetRange(string name)
@@ -394,20 +408,24 @@ namespace SheetBoard
         private void UpdateStatus()
         {
             statusLevel = 2;
-            if (audience != SheetBoardAudience.Public && !permissionKnown) { statusText = GetPermissionWaitingText(); return; }
+            if (audience != SheetBoardAudience.Public && !permissionKnown) { statusLevel = 3; statusText = GetPermissionWaitingText(); return; }
             if (audience != SheetBoardAudience.Public && !permissionAllowed) { statusText = GetPermissionDeniedText(); return; }
             if (validUrlCount == 0) { statusText = ResolveText(urlMissingText, JapaneseUrlMissingText, EnglishUrlMissingText); return; }
-            if (inFlight && !hasSuccess) { statusText = ResolveText(loadingText, JapaneseLoadingText, EnglishLoadingText); return; }
+            if (inFlight && !hasSuccess) { statusLevel = 3; statusText = ResolveText(loadingText, JapaneseLoadingText, EnglishLoadingText); return; }
             if (!hasSuccess)
             {
-                if (failed)
+                if (failed && !manualPending && Time.realtimeSinceStartup >= nextFetchAt && nearRadius > 0f && (!hasNear || Time.realtimeSinceStartup - lastNearAt > nearWindow))
+                {
+                    statusLevel = 3; statusText = ResolveText(waitingNearText, JapaneseWaitingNearText, EnglishWaitingNearText);
+                }
+                else if (failed)
                 {
                     int seconds = Mathf.CeilToInt(Mathf.Max(0f, nextFetchAt - Time.realtimeSinceStartup));
-                    statusText = ResolveText(failedText, JapaneseFailedText, EnglishFailedText).Replace("{code}", errorCode).Replace("{s}", seconds.ToString());
+                    statusText = ResolveText(failedText, JapaneseFailedText, EnglishFailedText).Replace("{code}", GetErrorDescription()).Replace("{s}", seconds.ToString());
                 }
-                else if (manualPending) statusText = ResolveText(loadingText, JapaneseLoadingText, EnglishLoadingText);
-                else if (nearRadius > 0f && (!hasNear || Time.realtimeSinceStartup - lastNearAt > nearWindow)) statusText = ResolveText(waitingNearText, JapaneseWaitingNearText, EnglishWaitingNearText);
-                else statusText = ResolveText(loadingText, JapaneseLoadingText, EnglishLoadingText);
+                else if (manualPending) { statusLevel = 3; statusText = ResolveText(loadingText, JapaneseLoadingText, EnglishLoadingText); }
+                else if (nearRadius > 0f && (!hasNear || Time.realtimeSinceStartup - lastNearAt > nearWindow)) { statusLevel = 3; statusText = ResolveText(waitingNearText, JapaneseWaitingNearText, EnglishWaitingNearText); }
+                else { statusLevel = 3; statusText = ResolveText(loadingText, JapaneseLoadingText, EnglishLoadingText); }
                 return;
             }
             DateTime now = Utilities.IsValid(Networking.LocalPlayer) ? Networking.GetNetworkDateTime() : DateTime.UtcNow;
@@ -415,9 +433,10 @@ namespace SheetBoard
             double nowUnix = (now - epoch).TotalSeconds;
             double minutes = Math.Max(0d, nowUnix - updatedUnix) / SecondsPerMinute;
             string elapsed = ((int)minutes).ToString() + ResolveText(minutesUnit, JapaneseMinutesUnit, EnglishMinutesUnit);
+            if (minutes < 1d) elapsed = GetResolvedLanguage() == SheetBoardLanguage.Japanese ? "たった今" : "just now";
             if (minutes >= MinutesPerDay) elapsed = ((int)(minutes / MinutesPerDay)).ToString() + ResolveText(daysUnit, JapaneseDaysUnit, EnglishDaysUnit);
             else if (minutes >= MinutesPerHour) elapsed = ((int)(minutes / MinutesPerHour)).ToString() + ResolveText(hoursUnit, JapaneseHoursUnit, EnglishHoursUnit);
-            bool stale = aliveUnix > 0d && (nowUnix - aliveUnix) / SecondsPerMinute > staleMinutes;
+            bool stale = aliveUnix > 0d && (nowUnix - aliveUnix) / SecondsPerMinute > StaleMinutes;
             statusLevel = failed || stale ? 1 : 0;
             string template = failed ? ResolveText(retryText, JapaneseRetryText, EnglishRetryText) : (stale ? ResolveText(staleText, JapaneseStaleText, EnglishStaleText) : ResolveText(freshText, JapaneseFreshText, EnglishFreshText));
             DateTime localTime = epoch.AddSeconds(updatedUnix).ToLocalTime();
@@ -427,6 +446,7 @@ namespace SheetBoard
         }
 
         public string GetStatusText() { return statusText; }
+        // 0 normal, 1 warning, 2 error, 3 preparing.
         public int GetStatusLevel() { return statusLevel; }
         public int GetAccessStatus() { return HasPermission() ? 0 : (permissionKnown ? 2 : 1); }
 

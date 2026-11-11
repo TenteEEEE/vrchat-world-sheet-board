@@ -10,6 +10,77 @@ const crypto = require('node:crypto');
 const script = fs.readFileSync(path.resolve(__dirname, '../../../Packages/com.tentee.vrc-sheet-board/AppsScript/SheetBoard.gs'), 'utf8');
 const plain = value => JSON.parse(JSON.stringify(value));
 
+test('S2 settings sheet ID restores a renamed tab', () => {
+  const h = harness({doc: {settingsSheetId: '42'}});
+  let name = 'renamed';
+  const sheet = {getSheetId: () => 42, setName: value => {name = value;}};
+  h.context.SpreadsheetApp.getActiveSpreadsheet = () => ({getSheetByName: () => null, getSheets: () => [sheet]});
+  assert.equal(h.context.findSettingsSheet_(), sheet);
+  assert.equal(name, 'SheetBoard設定');
+});
+
+test('S2 empty publication requires confirmation and trigger failure preserves Gist', () => {
+  const h = harness({doc: {gistId: 'g', gistOwner: 'admin', publishedNameCount: '1'}});
+  h.context.readRanges_ = () => ({ranges: {}, warnings: [], rowStatus: []});
+  assert.deepEqual(plain(h.context.publish_(true, false, false, 'dialog')), {needsConfirm: 'empty'});
+  assert.equal(h.requests.length, 0);
+  assert.throws(() => h.context.publish_(false, true), /表示する範囲が1つもなくなった/);
+  assert.equal(h.requests.length, 0);
+  assert.equal(h.context.publish_(true, false, false, 'confirmed'), true);
+  assert.equal(h.requests.filter(r => r.method === 'patch').length, 1);
+});
+
+test('S2 trigger ownership, disconnection and pending race', () => {
+  const h = harness({doc: {gistId: 'g', gistOwner: 'admin'}});
+  h.context.installTriggers_();
+  assert.equal(h.shared.getProperty('triggerOwner'), crypto.createHash('sha256').update('admin@example.test').digest('hex').slice(0, 16));
+  h.shared.setProperty('triggerOwner', 'another');
+  h.context.onTimer();
+  assert.equal(h.triggers.length, 0);
+  h.shared.deleteProperty('triggerOwner');
+  h.context.readRanges_ = () => {h.shared.setProperty('pending', 'new'); return {ranges: {a: {}}, warnings: [], rowStatus: []};};
+  h.shared.setProperty('pending', 'old');
+  assert.equal(h.context.publish_(true), true);
+  assert.equal(h.shared.getProperty('pending'), 'new');
+  h.context.disconnectConfirmed();
+  assert.match(h.context.overallStatus_().text, /連携を解除/);
+});
+
+test('S2 setup guidance, copy fallback, version and fixed Gist description', () => {
+  const h = harness({user: {}, doc: {}});
+  h.context.publishNow();
+  assert.match(h.dialogs.at(-1)[1], /まだセットアップされていません/);
+  assert.match(h.context.clientHelpers_(), /execCommand\("copy"\)/);
+  assert.match(h.context.clientHelpers_(), /Ctrl\+C/);
+  h.context.showStatus();
+  assert.match(h.dialogs.at(-1)[1], /スクリプトの版: 0\.5\.0/);
+  const owner = harness();
+  owner.context.createGist_('{}', 'test-token');
+  assert.equal(JSON.parse(owner.requests[0].payload).description, 'Sheet Board');
+});
+
+test('S5 setup status uses shared properties for staff', () => {
+  const h = harness({user: {}, doc: {gistId: 'g'}});
+  assert.equal(h.triggers.length, 0);
+  h.context.publishNow();
+  assert.match(h.dialogs.at(-1)[1], /受け付けました/);
+  h.shared.setProperty('lastPublishOutcome', 'disconnected');
+  h.context.publishNow();
+  assert.equal(h.dialogs.at(-1)[1], '管理者がGitHub連携を解除したため、自動公開は止まっています。新しい管理者が SheetBoard → セットアップ・修復 を実行してください。');
+  h.shared.deleteProperty('gistId');
+  h.context.publishNow();
+  assert.match(h.dialogs.at(-1)[1], /まだセットアップされていません/);
+});
+
+test('S5 declining an empty publication reports cancellation', () => {
+  const h = harness({doc: {gistId: 'g', gistOwner: 'admin', publishedNameCount: '1', lastPublishOutcome: 'failure'}});
+  h.context.readRanges_ = () => ({ranges: {}, warnings: [], rowStatus: []});
+  h.context.SpreadsheetApp.getUi = () => ({ButtonSet: {YES_NO: 'yes_no'}, Button: {YES: 'yes'}, alert: () => 'no'});
+  h.context.publishNow();
+  assert.equal(h.dialogs.at(-1)[1], '公開を取りやめました。掲示板は変わっていません。');
+  assert.equal(h.requests.length, 0);
+});
+
 function properties(initial = {}) {
   const data = {...initial};
   return {
@@ -27,7 +98,7 @@ function harness({user = {token: 'test-token', login: 'admin'}, doc = {}, fetch,
   const requests = [], mails = [], triggers = [], dialogs = [], lockWaits = [], userLockWaits = [];
   let releases = 0, uuid = 0;
   let userLockHeld = userLocked;
-  const spreadsheet = {getName: () => 'テストシート', getUrl: () => 'https://example.test/sheet', getSpreadsheetTimeZone: () => 'Asia/Tokyo', getSheetByName: () => null};
+  const spreadsheet = {getName: () => 'テストシート', getUrl: () => 'https://example.test/sheet', getSpreadsheetTimeZone: () => 'Asia/Tokyo', getSheetByName: () => null, getActiveSheet: () => null, getActiveRange: () => null};
   const context = vm.createContext({
     PropertiesService: {getUserProperties: () => users, getDocumentProperties: () => shared},
     LockService: {
@@ -39,8 +110,8 @@ function harness({user = {token: 'test-token', login: 'admin'}, doc = {}, fetch,
     },
     Utilities: {
       getUuid: () => 'pending-' + ++uuid,
-      DigestAlgorithm: {MD5: 'md5'}, Charset: {UTF_8: 'utf8'},
-      computeDigest: (_, text) => Array.from(crypto.createHash('md5').update(text, 'utf8').digest()),
+      DigestAlgorithm: {MD5: 'md5', SHA_256: 'sha256'}, Charset: {UTF_8: 'utf8'},
+      computeDigest: (algorithm, text) => Array.from(crypto.createHash(algorithm).update(text, 'utf8').digest()),
       newBlob: text => ({getBytes: () => Buffer.from(text, 'utf8')}),
       formatDate: (date, zone, pattern) => { if (pattern === 'Z') return '+0900'; const d = new Date(date); const parts = new Intl.DateTimeFormat('en-CA', {timeZone: zone || 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'}).formatToParts(d).reduce((a, x) => (a[x.type] = x.value, a), {}); return parts.year + '/' + parts.month + '/' + parts.day + ' ' + parts.hour + ':' + parts.minute; }
     },
@@ -63,9 +134,11 @@ function harness({user = {token: 'test-token', login: 'admin'}, doc = {}, fetch,
       return {getResponseCode: () => result.status, getContentText: () => result.text === undefined ? JSON.stringify(result.body || {}) : result.text, getAllHeaders: () => result.headers || {}};
     }}
   });
-  const source = script.replace(/const GITHUB_CLIENT_ID = '[^']*'/, "const GITHUB_CLIENT_ID = '" + clientId + "'");
+  const source = script.replace(/const GITHUB_CLIENT_ID = '[^']*'/, "const GITHUB_CLIENT_ID = '" + clientId + "'")
+    .replaceAll('sheet.getSheetId()', '(sheet.getSheetId ? sheet.getSheetId() : 1)');
   vm.runInContext(source, context, {filename: 'SheetBoard.gs'});
   context.__readRanges_ = context.readRanges_;
+  context.__ensureSettingsSheet_ = context.ensureSettingsSheet_;
   context.readRanges_ = () => {
     const ranges = {schedule: {rows: [['予定']]}};
     return {ranges, warnings: []};
@@ -596,7 +669,7 @@ test('a GitHub API 401 refreshes and retries the API request no more than once',
     apiCalls++;
     return {status: 401, body: {message: 'unauthorized'}};
   }});
-  assert.throws(() => h.context.githubRequest_('patch', '/gists/example', {files: {} }), /連携をやり直す/);
+  assert.throws(() => h.context.githubRequest_('patch', '/gists/example', {files: {} }), /セットアップ・修復/);
   assert.equal(apiCalls, 2);
   assert.equal(h.users.data.reauthRequired, 'true');
 });
@@ -726,7 +799,7 @@ test('overallStatus_ covers setup, reconnect, failure, stale, empty, pending, an
   const h = harness(); const c = h.context, p = h.shared;
   assert.equal(c.overallStatus_().level, 'none');
   p.setProperties({gistId:'g',worldUrl:'u',lastPublishOutcome:'reauth_required'});
-  assert.deepEqual(plain(c.overallStatus_()), {level:'error',icon:'⚠',text:'GitHub連携の期限が切れたため、公開が止まっています',action:'管理者がメニュー「SheetBoard → 管理者用 → GitHub連携をやり直す」を実行してください（URLは変わりません）'});
+  assert.deepEqual(plain(c.overallStatus_()), {level:'error',icon:'⚠',text:'GitHub連携の期限が切れたため、公開が止まっています',action:'管理者がメニュー「SheetBoard → セットアップ・修復」を実行してください（URLは変わりません）'});
   p.setProperty('lastPublishOutcome','failure'); p.setProperty('lastPublishStatus','failure'); p.setProperty('lastError','2026-01-01T00:00:00.000Z 試験エラー');
   assert.match(c.overallStatus_().text,/試験エラー/);
   p.setProperty('lastPublishStatus','success'); p.setProperty('lastPublishOutcome','success'); p.setProperty('lastPublishMillis',String(Date.now()-91*60000)); p.setProperty('publishedNames','["board1"]');
@@ -761,6 +834,17 @@ test('showStatus presents friendly state, a wired copy control, and localized er
   assert.match(html,/id="copyworld" onclick="copyText\('worldUrl'\)"/); assert.match(html,/class="status/);
   for(const secret of ['success','failure','状態未記録','2026-01-02T']) assert.equal(html.includes(secret),false);
   assert.match(html,/2026\/01\/02 12:04/);
+  assert.match(html,/掲示板URL（ワールド作者に渡します）/);
+  assert.equal(html.includes('直近のエラー'),false);
+  assert.equal((html.match(/公開失敗/g)||[]).length,1);
+});
+
+test('showStatus lists an error notice when the state block does not contain it', () => {
+  const h=harness({doc:{gistId:'g',worldUrl:'u',lastPublishStatus:'success',lastPublishOutcome:'success',lastError:'2026-01-02T03:04:00.000Z URL変更のお知らせメールを送れませんでした。',warnings:'[]',publishedNames:'["board1"]'}});
+  h.context.showStatus();
+  const html=h.dialogs.at(-1)[1];
+  assert.equal(html.includes('直近のエラー'),false);
+  assert.match(html,/<h3>お知らせ<\/h3><ul><li>2026\/01\/02 12:04 URL変更のお知らせメールを送れませんでした。<\/li>/);
 });
 
 test('finishSetup returns a zero range count and finish targets exist in every setup screen', () => {
@@ -770,7 +854,7 @@ test('finishSetup returns a zero range count and finish targets exist in every s
   h.context.showFinishDialog_();
   const finishHtml=h.dialogs.at(-1)[1];
   assert.match(finishHtml,/<div id="result" style="display:none"><\/div>/);
-  assert.match(finishHtml,/function finish\(\)/);
+  assert.match(finishHtml,/function finish\(confirmed\)/);
   assert.match(finishHtml,/掲示板に出るのは、設定タブに書いた範囲だけです。/);
   assert.match(finishHtml,/次にやること/);
   assert.match(finishHtml,/document\.getElementById\("copyurl"\)\.onclick=function\(\)\{copyText\("url"\)\}/);
@@ -992,4 +1076,116 @@ test('addSelectionToBoard replaces the sample then adds board2, with staff guida
   active={getName:()=> 'SheetBoard設定'};c.addSelectionToBoard();assert.match(h.dialogs.at(-1)[1],/表全体をドラッグで選択/);
   active=source;selected={getNumRows:()=>1,getNumColumns:()=>1,getA1Notation:()=> 'A1',getSheet:()=>source};c.addSelectionToBoard();assert.match(h.dialogs.at(-1)[1],/メニュー「SheetBoard → 選択範囲を掲示板に追加」をもう一度実行/);
   selected={getNumRows:()=>2,getNumColumns:()=>2,getA1Notation:()=> 'A1:B2',getSheet:()=>source};protectedWrite=true;c.addSelectionToBoard();assert.match(h.dialogs.at(-1)[1],/設定タブは管理者だけが編集できます/);
+});
+
+test('setup menu uses the unified label and still calls startSetup', () => {
+  const h = harness(), items = [], adminItems = [];
+  const admin = {addItem: (label, handler) => {adminItems.push([label, handler]); return admin;}};
+  const menu = {addItem: (label, handler) => {items.push([label, handler]); return menu;}, addSubMenu: () => menu, addToUi: () => {}};
+  h.context.SpreadsheetApp.getUi = () => ({createMenu: name => name === 'SheetBoard' ? menu : admin});
+  h.context.onOpen();
+  assert.deepEqual(items[0], ['セットアップ・修復', 'startSetup']);
+  assert.deepEqual(adminItems.map(item => item[0]), ['GitHub連携をやり直す', '公開先を作り直す', '連携を解除']);
+});
+
+test('startSetup routes healthy tokens to finish and authorization problems to GitHub', () => {
+  const cases = [
+    {user: {token: 't'}, doc: {}, expected: 'セットアップ'},
+    {user: {token: 't', reauthRequired: 'true'}, doc: {}, expected: 'GitHub連携'},
+    {user: {token: 't'}, doc: {lastPublishOutcome: 'reauth_required'}, expected: 'GitHub連携'},
+    {user: {token: 't'}, doc: {lastPublishStatus: 'failure', lastError: '失敗（エラー番号 403）'}, expected: 'GitHub連携'},
+    {user: {token: 't'}, doc: {lastPublishStatus: 'failure', lastError: '許可がありません'}, expected: 'GitHub連携'}
+  ];
+  for (const item of cases) {
+    const h = harness({user: item.user, doc: item.doc, fetch: request => request.url.endsWith('/device/code')
+      ? {status: 200, body: {device_code: 'device', user_code: 'ABCD', verification_uri: 'https://github.com/login/device', interval: 5}}
+      : {status: 200, body: {}}});
+    h.context.SpreadsheetApp.getActiveSpreadsheet = () => ({getActiveSheet: () => ({getName: () => 'Source'}), getActiveRange: () => null});
+    h.context.startSetup();
+    assert.equal(h.dialogs.at(-1)[0], item.expected);
+  }
+});
+
+test('startSetup records only multi-cell selections outside the settings tab', () => {
+  for (const selected of [
+    {name: 'Source', rows: 1, cols: 1, expected: null},
+    {name: 'SheetBoard設定', rows: 2, cols: 2, expected: null},
+    {name: 'Source', rows: 2, cols: 1, expected: 'Source!A1:A2'}
+  ]) {
+    const h = harness({user: {token: 't'}});
+    const sheet = {getName: () => selected.name};
+    h.context.SpreadsheetApp.getActiveSpreadsheet = () => ({getActiveSheet: () => sheet, getActiveRange: () => ({
+      getNumRows: () => selected.rows, getNumColumns: () => selected.cols, getA1Notation: () => 'A1' + (selected.rows > 1 ? ':A2' : '')
+    })});
+    h.context.recordSetupSelection_();
+    assert.equal(h.users.getProperty('setupSelection'), selected.expected);
+  }
+});
+
+test('finishSetup replaces the sample with the selected range, publishes it, and reports the added name', () => {
+  const h = harness({user: {token: 't', setupSelection: 'Source!B2:D3'}, doc: {gistId: 'g', worldUrl: 'https://example.test/world'}});
+  const rows = [['#sample', 'Source!A1:F20', '', false, true, '', '']];
+  const settings = {getLastRow: () => rows.length + 1, getRange: (r, c, n, width) => ({
+    getValues: () => c === 1 && width === 1 ? rows.map(row => [row[0]]) : rows,
+    setValues: values => {rows[r - 2] = [...values[0], '', ''];}
+  })};
+  const source = {getName: () => 'Source'};
+  const ss = {getSheetByName: name => name === 'SheetBoard設定' ? settings : null, getSheets: () => [source], setActiveSheet: () => {}};
+  h.context.SpreadsheetApp.getActiveSpreadsheet = () => ss;
+  h.context.checkGistOwner_ = () => {};
+  h.context.installTriggers_ = () => {};
+  let published = false;
+  h.context.publish_ = () => {published = true; h.shared.setProperties({publishedNames: '["board1"]', publishedNameCount: '1'}); return true;};
+  h.context.worldUrl_ = () => 'https://example.test/world';
+  h.context.writeSheetStatus_ = () => {};
+  const result = plain(h.context.finishSetup());
+  assert.equal(rows[0][0], 'board1');
+  assert.equal(rows[0][1], 'Source!B2:D3');
+  assert.equal(published, true);
+  assert.equal(result.addedName, 'board1');
+  assert.equal(result.addedRange, 'Source!B2:D3');
+  assert.equal(result.repaired, true);
+  assert.equal(h.users.getProperty('setupSelection'), null);
+});
+
+test('finishSetup does not add a row for existing ranges, empty selections, or settings-tab selections', () => {
+  for (const scenario of [
+    {selection: 'Source!A1:B2', rows: [['board1', 'Source!A1']]},
+    {selection: '', rows: [['#sample', 'Source!A1:F20']]},
+    {selection: 'SheetBoard設定!A1:B2', rows: [['#sample', 'Source!A1:F20']]}
+  ]) {
+    const h = harness({user: {token: 't', setupSelection: scenario.selection}, doc: {worldUrl: 'url'}});
+    const rows = scenario.rows.map(row => [...row, '', false, true, '', '']);
+    const settings = {getLastRow: () => rows.length + 1, getRange: (r, c, n, width) => ({
+      getValues: () => c === 1 && width === 1 ? rows.map(row => [row[0]]) : rows,
+      setValues: values => {rows[r - 2] = values[0];}
+    })};
+    h.context.SpreadsheetApp.getActiveSpreadsheet = () => ({getSheetByName: () => settings, getSheets: () => [{getName: () => 'Source'}],
+      getActiveSheet: () => ({getName: () => scenario.selection.startsWith('SheetBoard設定!') ? 'SheetBoard設定' : 'Source'}),
+      getActiveRange: () => ({getNumRows: () => 2, getNumColumns: () => 2, getA1Notation: () => 'A1:B2'}), setActiveSheet: () => {}});
+    if (scenario.selection.startsWith('SheetBoard設定!')) h.context.recordSetupSelection_();
+    h.context.checkGistOwner_ = () => {}; h.context.installTriggers_ = () => {};
+    h.context.publish_ = () => {h.shared.setProperties({publishedNames: '["board1"]', publishedNameCount: '1'}); return true;};
+    h.context.worldUrl_ = () => 'url'; h.context.writeSheetStatus_ = () => {};
+    const result = plain(h.context.finishSetup());
+    assert.equal(result.addedName, '');
+    assert.equal(result.addedRange, '');
+    assert.equal(result.repaired, false);
+    assert.equal(rows.length, scenario.rows.length);
+  }
+});
+
+test('new settings tabs group and collapse columns F and G', () => {
+  const h = harness(); let grouped = false, collapsed = false, existing = false, groups = 0;
+  const sheet = {
+    getMaxRows: () => 100, getRange: () => ({setNumberFormat: () => {}, insertCheckboxes: () => {}, setValues: () => {}, setNote: () => {}, shiftColumnGroupDepth: depth => {groups++; grouped = depth === 1;}}),
+    setFrozenRows: () => {}, setColumnWidth: () => {}, getColumnGroup: (column, depth) => ({collapse: () => {groups++; collapsed = column === 6 && depth === 1;}})
+  };
+  const source = {getName: () => 'Source'};
+  h.context.SpreadsheetApp.getActiveSpreadsheet = () => ({getSheetByName: () => existing ? sheet : null, getSheets: () => [source], insertSheet: () => {existing = true; return sheet;}});
+  h.context.__ensureSettingsSheet_();
+  assert.equal(grouped, true);
+  assert.equal(collapsed, true);
+  h.context.__ensureSettingsSheet_();
+  assert.equal(groups, 2);
 });
