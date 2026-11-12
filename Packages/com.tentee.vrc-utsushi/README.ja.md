@@ -139,7 +139,7 @@ Utsushi は、スプレッドシートに紐づいた Apps Script として動�
 
 ### 3-2. 掲示板を置く
 
-**Tools → TenteEEEE → Utsushi → 掲示板をシーンに置く** を選びます。シーンビューで見ている場所（高さはワールド原点から 1.3 m、向きは固定）に、掲示板（`Utsushi Display`）とデータ元（`Utsushi Source`）が置かれます。
+**Tools → TenteEEEE → Utsushi → 掲示板をシーンに置く** を選びます。ワールド原点の真上（高さ 1.3 m、向きは固定）に、掲示板（`Utsushi Display`）とデータ元（`Utsushi Source`）が置かれます。
 
 prefab などはビルド済みで同梱されています。ほかの準備は不要です。
 

@@ -4,7 +4,7 @@
 
 ### Changed
 
-- 「掲示板をシーンに置く」 places the board center 1.3 m above the world origin with a fixed rotation (readable from the -Z side), instead of at the Scene view pivot height and camera yaw.
+- 「掲示板をシーンに置く」 places the board center 1.3 m above the world origin with a fixed rotation (readable from the -Z side), instead of at the Scene view pivot and camera yaw. Additional boards are placed beside it along +X.
 - Rename the Source viewing-access options to match PermissionController: 全員 / 管理者と協力者 / 管理者のみ.
 
 ## [0.6.0] - 2026-11-12

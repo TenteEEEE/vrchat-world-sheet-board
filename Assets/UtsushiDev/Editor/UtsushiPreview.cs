@@ -311,8 +311,15 @@ namespace UtsushiDev
             UtsushiInstaller.InstallSampleMenu();
             UtsushiDisplay installed = UnityEngine.Object.FindFirstObjectByType<UtsushiDisplay>();
             if (installed == null) throw new InvalidOperationException("Install Sample did not create a display.");
-            if (Mathf.Abs(installed.transform.position.y - 1.3f) > 0.0001f || Quaternion.Angle(installed.transform.rotation, Quaternion.identity) > 0.01f)
-                throw new InvalidOperationException("Install Sample placed the board at " + installed.transform.position + " / " + installed.transform.eulerAngles + "; expected y=1.3 and no rotation.");
+            if (Vector3.Distance(installed.transform.position, new Vector3(0f, 1.3f, 0f)) > 0.0001f || Quaternion.Angle(installed.transform.rotation, Quaternion.identity) > 0.01f)
+                throw new InvalidOperationException("Install Sample placed the board at " + installed.transform.position + " / " + installed.transform.eulerAngles + "; expected (0, 1.3, 0) and no rotation.");
+            UtsushiInstaller.InstallSampleMenu();
+            UtsushiDisplay[] placedBoards = UnityEngine.Object.FindObjectsByType<UtsushiDisplay>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            UtsushiDisplay second = null;
+            foreach (UtsushiDisplay placed in placedBoards) if (placed != installed) second = placed;
+            if (placedBoards.Length != 2 || second == null || Mathf.Abs(second.transform.position.y - 1.3f) > 0.0001f || Mathf.Abs(second.transform.position.z) > 0.0001f || second.transform.position.x < 1.59f)
+                throw new InvalidOperationException("Second board was not placed beside the first: " + (second == null ? "missing" : second.transform.position.ToString()));
+            UnityEngine.Object.DestroyImmediate(second.gameObject);
             var installedUdon = UdonSharpEditorUtility.GetBackingUdonBehaviour(installed);
             if (installedUdon == null || !(UdonValue(installedUdon, "source") is UnityEngine.Object source) || source == null)
                 throw new InvalidOperationException("Install Sample did not wire the Udon source.");

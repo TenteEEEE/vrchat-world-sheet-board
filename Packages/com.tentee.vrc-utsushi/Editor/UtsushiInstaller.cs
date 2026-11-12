@@ -152,7 +152,7 @@ namespace UtsushiEditor
             return path;
         }
 
-        // Board center height from the world origin, at eye level for a 1.3 m avatar. Rotation is fixed (faces -Z).
+        // Boards are placed above the world origin, centered at eye level for a 1.3 m avatar, with a fixed rotation (readable from -Z). Later boards shift along +X.
         private const float BoardHeight = 1.3f;
 
         [MenuItem("Tools/TenteEEEE/Utsushi/掲示板をシーンに置く")]
@@ -183,32 +183,20 @@ namespace UtsushiEditor
             if (sourceCount > 1) Debug.Log("データ元が複数あるため『" + source.gameObject.name + "』につなぎました", source);
             if (source == null) source = InstantiatePrefab(SourcePrefab, scene).GetComponent<UtsushiSource>();
             GameObject board = InstantiatePrefab(DisplayPrefab, scene);
-            SceneView sceneView = SceneView.lastActiveSceneView;
-            if (sceneView != null)
+            board.transform.position = new Vector3(0f, BoardHeight, 0f);
+            board.transform.rotation = Quaternion.identity;
+            Canvas canvas = board.GetComponentInChildren<Canvas>(true);
+            float width = canvas == null ? 1.6f : ((RectTransform)canvas.transform).rect.width * Mathf.Abs(canvas.transform.lossyScale.x);
+            UtsushiDisplay[] existingBoards = Object.FindObjectsByType<UtsushiDisplay>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            for (int attempt = 0; attempt < 100; attempt++)
             {
-                board.transform.position = new Vector3(sceneView.pivot.x, BoardHeight, sceneView.pivot.z);
-                board.transform.rotation = Quaternion.identity;
-                Canvas canvas = board.GetComponentInChildren<Canvas>(true);
-                float width = canvas == null ? 1.6f : ((RectTransform)canvas.transform).rect.width * Mathf.Abs(canvas.transform.lossyScale.x);
-                UtsushiDisplay[] existingBoards = Object.FindObjectsByType<UtsushiDisplay>(FindObjectsInactive.Include, FindObjectsSortMode.None);
-                for (int attempt = 0; attempt < 10; attempt++)
-                {
-                    bool occupied = false;
-                    foreach (UtsushiDisplay existing in existingBoards)
-                        if (existing != null && existing.gameObject != board && existing.gameObject.scene == scene &&
-                            Vector3.Distance(existing.transform.position, board.transform.position) < width)
-                        { occupied = true; break; }
-                    if (!occupied) break;
-                    board.transform.position += Vector3.right * width;
-                }
-            }
-            else
-            {
-                float x = 0f;
-                foreach (UtsushiDisplay existing in Object.FindObjectsByType<UtsushiDisplay>(FindObjectsInactive.Include, FindObjectsSortMode.None))
-                    if (existing != null && existing.gameObject != board && existing.gameObject.scene == scene)
-                        x = Mathf.Max(x, existing.transform.position.x + 2f);
-                board.transform.position = new Vector3(x, BoardHeight, 0);
+                bool occupied = false;
+                foreach (UtsushiDisplay existing in existingBoards)
+                    if (existing != null && existing.gameObject != board && existing.gameObject.scene == scene &&
+                        Vector3.Distance(existing.transform.position, board.transform.position) < width)
+                    { occupied = true; break; }
+                if (!occupied) break;
+                board.transform.position += Vector3.right * width;
             }
             UtsushiDisplay display = board.GetComponent<UtsushiDisplay>();
             RecordProxyUndo(display, "Configure Utsushi Display");
