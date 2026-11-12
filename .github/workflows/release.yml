@@ -29,7 +29,7 @@ jobs:
         with:
           node-version: '22'
       - name: Test Apps Script
-        run: node --test docs/SheetBoard/tests/*.test.cjs
+        run: node --test docs/Utsushi/tests/*.test.cjs
       - name: Build and validate release artifacts
         env:
           DRY_RUN: ${{ inputs.dry_run }}
@@ -45,7 +45,7 @@ jobs:
       - name: Save build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sheet-board-release
+          name: utsushi-release
           path: dist/*
           if-no-files-found: error
       - name: Publish release
@@ -58,7 +58,7 @@ jobs:
             exit 1
           fi
           gh release create "$GITHUB_REF_NAME" dist/* \
-            --verify-tag --target "$GITHUB_SHA" --title "Sheet Board $GITHUB_REF_NAME" \
+            --verify-tag --target "$GITHUB_SHA" --title "Utsushi $GITHUB_REF_NAME" \
             --notes-file docs/RELEASE_NOTES.md
       - name: Trigger VPM listing rebuild
         if: ${{ github.event_name == 'push' || !inputs.dry_run }}

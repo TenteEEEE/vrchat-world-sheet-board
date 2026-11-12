@@ -1,4 +1,6 @@
-# Sheet Board
+# Utsushi
+
+Formerly "Sheet Board" (renamed in 0.6.0; same features).
 
 Show a Google Sheets range on boards in a VRChat world, and update it **without re-uploading the world**. Built for event teams: staff edit the team's spreadsheet, and the boards in the world follow within a few minutes.
 
@@ -9,7 +11,7 @@ Show a Google Sheets range on boards in a VRChat world, and update it **without 
 
 The full step-by-step guide (for non-technical event staff) is in Japanese: **`README.ja.md`**.
 
-Each spreadsheet publishes all enabled ranges through one URL. Set in-world viewing access on each `SheetBoard Source` with its PermissionController. If different audiences need different data, use separate spreadsheets and separate Sources/Displays.
+Each spreadsheet publishes all enabled ranges through one URL. Set in-world viewing access on each `Utsushi Source` with its PermissionController. If different audiences need different data, use separate spreadsheets and separate Sources/Displays.
 
 ## Requirements
 
@@ -18,11 +20,11 @@ Each spreadsheet publishes all enabled ranges through one URL. Set in-world view
 
 ## Install
 
-Add `https://tenteeeee.github.io/vpm-repos/index.json` in VRChat Creator Companion (Settings → Packages → Add Repository), then add **Sheet Board** to your project. The prefabs are prebuilt; no build step is needed. The placement menu offers to import TMP Essential Resources if needed.
+Add `https://tenteeeee.github.io/vpm-repos/index.json` in VRChat Creator Companion (Settings → Packages → Add Repository), then add **Utsushi** to your project. The prefabs are prebuilt; no build step is needed. The placement menu offers to import TMP Essential Resources if needed.
 
-For manual installation, import the `.unitypackage` from [GitHub Releases](https://github.com/TenteEEEE/vrchat-world-sheet-board/releases). Its Apps Script files are under `Assets/SheetBoard/AppsScript/`.
+For manual installation, import the `.unitypackage` from [GitHub Releases](https://github.com/TenteEEEE/vrchat-world-utsushi/releases). Its Apps Script files are under `Assets/Utsushi/AppsScript/`.
 
-After replacing `SheetBoard.gs` in an existing spreadsheet, the admin must run **SheetBoard → 管理者用 → GitHub連携をやり直す** to reconnect with the same GitHub account; existing Gist URLs remain unchanged. If authorization expires, run **SheetBoard → セットアップ・修復**.
+After replacing `Utsushi.gs` in an existing spreadsheet, the admin must run **Utsushi → 管理者用 → GitHub連携をやり直す** to reconnect with the same GitHub account; existing Gist URLs remain unchanged. If authorization expires, run **Utsushi → セットアップ・修復**.
 
 ## How it works
 
@@ -43,8 +45,8 @@ VRChat's String Loading only reads from an allowlist of hosts and Google is not 
 
 ## Setup (short version)
 
-1. **Admin** — install the bundled Apps Script in the spreadsheet, then select the table first and run **SheetBoard → セットアップ・修復 (Setup / Repair)**; the selected table is published as the first board. Configure additional ranges in **SheetBoard設定 (settings tab)**.
-2. **World creator** — run **Tools → TenteEEEE → Sheet Board → 掲示板をシーンに置く (Place a board in the scene)**, then paste the board URL into the board's Inspector. The URL is applied and checked automatically.
+1. **Admin** — install the bundled Apps Script in the spreadsheet, then select the table first and run **Utsushi → セットアップ・修復 (Setup / Repair)**; the selected table is published as the first board. Configure additional ranges in **Utsushi設定 (settings tab)**.
+2. **World creator** — run **Tools → TenteEEEE → Utsushi → 掲示板をシーンに置く (Place a board in the scene)**, then paste the board URL into the board's Inspector. The URL is applied and checked automatically.
 
 When formatting is enabled for a range (column E in the settings tab), dropdowns are displayed as chips.
 
@@ -59,7 +61,7 @@ The Unity Editor and Apps Script interfaces are Japanese only.
 ## Privacy and security
 
 - Anyone who has the URL can read published data directly. In-world viewing access limits normal loading and display; it does not keep the data confidential. This matters when a world creator decides to restrict viewing. URLs, Gist history, and downloaded copies cannot be hidden from people who know the URL or revoked.
-- Spreadsheet editors can change what is published and can edit the bound script, which runs with the admin's GitHub authorisation. Only trusted people should be editors; protect the settings tab; use a GitHub account dedicated to Sheet Board.
+- Spreadsheet editors can change what is published and can edit the bound script, which runs with the admin's GitHub authorisation. Only trusted people should be editors; protect the settings tab; use a GitHub account dedicated to Utsushi.
 - A spreadsheet publishes all enabled ranges through one URL. PermissionController controls viewing inside the world and does not change GitHub access. Keep private information out of published ranges.
 
 - The board URL contains the GitHub username. If sensitive data was published accidentally, remove it from the sheet and delete the Gist to remove its history. A new Gist has a different URL, so the world creator must replace the URL and re-upload the world; copies already obtained cannot be recalled.
@@ -82,11 +84,17 @@ In-world Source and Display messages can use Japanese or English. Auto follows e
 
 ## Upgrading from 0.x
 
+### Migrating from Sheet Board
+
+When you add Utsushi in VCC, the old package (`com.tentee.vrc-sheet-board`) is removed automatically. Boards and data sources already in your scene keep working because the script contents are unchanged. If you installed with a unitypackage, delete `Assets/SheetBoard` before installing Utsushi.
+
+The spreadsheet script keeps working without being pasted again. If you paste it again, the menu is named “Utsushi” and the settings tab is automatically renamed to “Utsushi設定”. The board URL does not change.
+
 - The Display fields `maxRows`, `maxCols`, and `maxOverlays` were removed. `maxChips` was removed in 0.3.1, and `refreshBusyText` was removed in 0.2.1.
 - Source and Display text fields now override the Japanese and English defaults. Leave a field empty, or set it to its old Japanese default, to use the default for the selected display language.
-- When moving from a `.unitypackage` install to VPM, the old `Assets/SheetBoard` folder is cleaned up. Do not install the package by both methods.
+- When moving from a `.unitypackage` install to VPM, the old `Assets/Utsushi` folder is cleaned up. Do not install the package by both methods.
 
-- Updating the Unity package does not update the script in the spreadsheet. The old menu remains until the new `SheetBoard.gs` is pasted into it.
+- Updating the Unity package does not update the script in the spreadsheet. The old menu remains until the new `Utsushi.gs` is pasted into it.
 - Old → new names: **はじめにセットアップ** → **セットアップ・修復**; **Install Sample into Current Scene** → **掲示板をシーンに置く**; **URL を適用** was removed because the board URL is applied automatically.
 - Check the script version at the end of **状態とURLを表示** (スクリプトの版: X).
 - Breaking change: Display `language` was removed; Source `staleMinutes`, `manualCooldown`, and `startDelayMax` are now constants.
@@ -95,7 +103,7 @@ In-world Source and Display messages can use Japanese or English. Auto follows e
 
 - **No URL is set:** Paste the board URL into the board's Inspector.
 - **Range not found:** Check the range name in the spreadsheet settings and the Display. An empty Display range name uses the first configured range.
-- **Auto-publish has stopped:** Open the Japanese SheetBoard menu and check the publishing status and URL. Run **SheetBoard → セットアップ・修復** if authorization has expired.
+- **Auto-publish has stopped:** Open the Japanese Utsushi menu and check the publishing status and URL. Run **Utsushi → セットアップ・修復** if authorization has expired.
 - **□ boxes:** The bundled font lacks some scripts and emoji. Use Japanese or English text supported by Noto Sans JP.
 
 In-world status examples: `Updated 21:05 (just now)`, `Updated 21:05 (2 h ago) · may be out of date`, `Updated 21:05 (3 min ago) · retrying`, `Loading…`, `Come closer to load`, and `Couldn't load · retrying in 10s (timed out)`. Errors can also say `invalid data` or `HTTP 404`.
@@ -104,11 +112,11 @@ Other messages include `No range has been published yet`, `No data source is set
 
 ## VRChat String Loading
 
-VRChat allows one String Loading request every five seconds across the entire world. Sheet Board shares this limit with every other world feature that uses String Loading. Manual refreshes and other requests may wait.
+VRChat allows one String Loading request every five seconds across the entire world. Utsushi shares this limit with every other world feature that uses String Loading. Manual refreshes and other requests may wait.
 
 ## iOS
 
-VRChat on iPhone may truncate String Loading data above about 800 KB, based on community reports. Sheet Board warns when published JSON exceeds this size but continues publishing; smaller ranges are more reliable on iPhone.
+VRChat on iPhone may truncate String Loading data above about 800 KB, based on community reports. Utsushi warns when published JSON exceeds this size but continues publishing; smaller ranges are more reliable on iPhone.
 
 The design and the JSON format are specified in `docs/SPEC.md`.
 

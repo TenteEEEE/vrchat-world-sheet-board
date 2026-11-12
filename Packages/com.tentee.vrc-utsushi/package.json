@@ -1,0 +1,32 @@
+{
+  "name": "com.tentee.vrc-utsushi",
+  "displayName": "Utsushi",
+  "version": "0.6.0",
+  "unity": "2022.3",
+  "author": {
+    "name": "TenteEEEE",
+    "url": "https://github.com/TenteEEEE"
+  },
+  "description": "Utsushi mirrors a Google Sheets range onto boards in a VRChat world and updates them without re-uploading the world (Apps Script -> GitHub Gist -> String Loading). Formerly \"Sheet Board\".",
+  "license": "MIT",
+  "url": "https://github.com/TenteEEEE/vrchat-world-utsushi/releases/download/0.6.0/com.tentee.vrc-utsushi-0.6.0.zip",
+  "documentationUrl": "https://github.com/TenteEEEE/vrchat-world-utsushi/blob/main/README.ja.md",
+  "changelogUrl": "https://github.com/TenteEEEE/vrchat-world-utsushi/blob/main/Packages/com.tentee.vrc-utsushi/CHANGELOG.md",
+  "keywords": [
+    "vrchat",
+    "worlds",
+    "udonsharp",
+    "spreadsheet",
+    "google-sheets",
+    "board"
+  ],
+  "legacyPackages": [
+    "com.tentee.vrc-sheet-board"
+  ],
+  "legacyFolders": {
+    "Assets\\SheetBoard": "d4b2086875fd50f4899ee0b74774ced9"
+  },
+  "vpmDependencies": {
+    "com.vrchat.worlds": "^3.10.0"
+  }
+}

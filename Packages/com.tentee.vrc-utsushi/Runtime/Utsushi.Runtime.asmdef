@@ -1,0 +1,22 @@
+{
+    "name": "Utsushi.Runtime",
+    "rootNamespace": "Utsushi",
+    "references": [
+        "Unity.TextMeshPro",
+        "UnityEngine.UI",
+        "UdonSharp.Runtime",
+        "VRC.SDKBase",
+        "VRC.SDK3",
+        "VRC.Udon",
+        "VRC.Udon.Serialization.OdinSerializer"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

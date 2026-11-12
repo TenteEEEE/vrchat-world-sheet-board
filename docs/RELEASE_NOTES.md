@@ -1,20 +1,17 @@
-<!-- version: 0.5.0 -->
-迷わず使えることを目標に、手順・用語・状態表示を見直しました。掲示板URLは自動で反映され、「URL を適用」ボタンは不要になりました。
+<!-- version: 0.6.0 -->
+Sheet Board は Utsushi（うつし）に名前を変えました。機能は 0.5.0 と同じです。
 
-- 掲示板URLは、Inspector で欄を変えたとき・ビルド開始時・Undo/Redo・再生開始時に自動で反映します。Inspector を開いただけではシーンを書き換えません。接続確認も自動で行い、結果を平易な文で表示します。
-- パッケージのフォルダを移動しても動作します（以前は移動するとビルドが止まりました）。
-- 掲示板の Inspector で掲示板URL・テーマ・サイズ（m）を編集できます。複数の掲示板やデータ元をまとめて編集できます。
-- ワールド内の表示: 範囲が見つからない／範囲が0件のときは赤で知らせ、大きすぎて文字が小さくなる表には注意を出します。「たった今」「時間切れ」「更新が止まっている可能性があります」など、訪問者に分かる言葉にしました。はみ出した文字がプルダウンの ▼ に重ならないようにしました。
-- Apps Script: メニューを「セットアップ・修復」に一本化しました。設定タブの名前を変えても追随し、範囲が0件になる公開は自動では止め、手動では確認します。連携を解除すると「自動公開は止まっています」と表示します。同じ GitHub アカウントを2人目が連携しても自動公開が二重に動かないようにしました。Gist の説明文はシート名を含まない「Sheet Board」に固定しました。
+- パッケージ ID は `com.tentee.vrc-utsushi`、リポジトリは `TenteEEEE/vrchat-world-utsushi` です（旧URLは転送されます）。
+- VCC で Utsushi を追加すると旧 Sheet Board は自動で外れ、シーンの掲示板・データ元はそのまま動きます（スクリプトの GUID が同じです）。
+- Unity のメニューは `Tools/TenteEEEE/Utsushi/…`、prefab は `Utsushi Display` などに変わります。
 
 ### 更新時の注意
 
-- **Google スプレッドシート側の `SheetBoard.gs` を最新版に貼り直してください。** 貼り直すまでメニューは旧版のままです。旧版から更新した場合は、管理者が **SheetBoard → 管理者用 → GitHub連携をやり直す** を一度実行してください。掲示板URLは変わりません。スクリプトの版は「状態とURLを表示」の末尾で確認できます。
-- **破壊的変更:** 掲示板（Display）の `language` を削除しました。掲示板の言語は常にデータ元（Source）に従います。データ元の `staleMinutes`・`manualCooldown`・`startDelayMax` は定数になりました。
-- 旧名との対応: 「はじめにセットアップ」→「セットアップ・修復」、「Install Sample into Current Scene」→「掲示板をシーンに置く」。
+- シートのスクリプトは貼り直さなくても動きます。貼り直す場合は `Utsushi.gs` を使ってください。貼り直すとメニュー名が「Utsushi」に、設定タブ名が「Utsushi設定」に自動で変わります。掲示板URL（`…/sheetboard.json`）は変わりません。
+- unitypackage で入れていた場合は `Assets/SheetBoard` を消してから入れてください。
 
 ### インストール
 
-VCC の一覧 [TenteEEEE VPM Repository](https://tenteeeee.github.io/vpm-repos/index.json) から **Sheet Board 0.5.0** を追加・更新してください。手動で導入する場合は、添付の `.unitypackage` を使えます。
+VCC の一覧 [TenteEEEE VPM Repository](https://tenteeeee.github.io/vpm-repos/index.json) から **Utsushi 0.6.0** を追加してください。手動で導入する場合は、添付の `.unitypackage` を使えます。
 
-動作環境は **Unity 2022.3 / VRChat Worlds SDK 3.10 以降**です。詳しい手順は [日本語 README](https://github.com/TenteEEEE/vrchat-world-sheet-board/blob/main/README.ja.md) を参照してください。
+詳しい手順は [日本語 README](https://github.com/TenteEEEE/vrchat-world-utsushi/blob/main/README.ja.md) を参照してください。

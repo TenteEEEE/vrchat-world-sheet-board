@@ -12,9 +12,9 @@ import tarfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-NAME = "com.tentee.vrc-sheet-board"
+NAME = "com.tentee.vrc-utsushi"
 PACKAGE = ROOT / "Packages" / NAME
-REPOSITORY = "TenteEEEE/vrchat-world-sheet-board"
+REPOSITORY = "TenteEEEE/vrchat-world-utsushi"
 
 
 def guid(meta: Path) -> str:
@@ -71,13 +71,13 @@ def validate(tag: str | None) -> tuple[dict, list[Path]]:
         else:
             if not Path(str(path) + ".meta").is_file():
                 raise SystemExit(f"Missing metadata: {path}")
-        if any(part in {"SheetBoardDev", ".git", "Library", "Logs"} for part in path.relative_to(PACKAGE).parts):
+        if any(part in {"UtsushiDev", ".git", "Library", "Logs"} for part in path.relative_to(PACKAGE).parts):
             raise SystemExit(f"Development or generated file is not allowed in release archives: {path}")
     for directory in PACKAGE.rglob("*"):
         if directory.is_dir():
             if not Path(str(directory) + ".meta").is_file():
                 raise SystemExit(f"Missing folder metadata: {directory}")
-    for behavior in ("SheetBoardSource", "SheetBoardDisplay"):
+    for behavior in ("UtsushiSource", "UtsushiDisplay"):
         text = (PACKAGE / "Runtime" / (behavior + ".asset")).read_text(encoding="utf-8")
         match = re.search(r"serializedUdonProgramAsset:.*?guid: ([0-9a-f]{32})", text)
         if not match or match[1] not in seen:
@@ -85,10 +85,10 @@ def validate(tag: str | None) -> tuple[dict, list[Path]]:
         compiled = Path(str(seen[match[1]])[:-5])
         if compiled.stat().st_size <= 100:
             raise SystemExit(f"Empty compiled program: {compiled}")
-    for required in ("AppsScript/SheetBoard.gs", "AppsScript/appsscript.json", "Fonts/NotoSansJP-Regular.otf", "Fonts/OFL-1.1.txt", "LICENSE", "README.ja.md"):
+    for required in ("AppsScript/Utsushi.gs", "AppsScript/appsscript.json", "Fonts/NotoSansJP-Regular.otf", "Fonts/OFL-1.1.txt", "LICENSE", "README.ja.md"):
         if not (PACKAGE / required).is_file():
             raise SystemExit(f"Missing distribution file: {required}")
-    font = (PACKAGE / "Fonts/SheetBoard JP Dynamic.asset").read_text(encoding="utf-8")
+    font = (PACKAGE / "Fonts/Utsushi JP Dynamic.asset").read_text(encoding="utf-8")
     for flag in ("m_AtlasPopulationMode: 1", "m_ClearDynamicDataOnBuild: 1", "m_GlyphTable: []", "m_CharacterTable: []"):
         if flag not in font:
             raise SystemExit(f"Export the font from Unity before releasing: missing {flag}")
@@ -119,8 +119,8 @@ def build(output: Path, tag: str | None) -> None:
     with unity_path.open("wb") as file:
         with gzip.GzipFile(fileobj=file, mode="wb", filename="", mtime=0) as compressed:
             with tarfile.open(fileobj=compressed, mode="w") as archive:
-                metadata = [(ROOT / "Tools/SheetBoardRoot.meta", "Assets/SheetBoard", None)]
-                metadata.extend((meta, "Assets/SheetBoard/" + Path(str(meta.relative_to(PACKAGE))[:-5]).as_posix(), Path(str(meta)[:-5])) for meta in files if meta.suffix == ".meta")
+                metadata = [(ROOT / "Tools/UtsushiRoot.meta", "Assets/Utsushi", None)]
+                metadata.extend((meta, "Assets/Utsushi/" + Path(str(meta.relative_to(PACKAGE))[:-5]).as_posix(), Path(str(meta)[:-5])) for meta in files if meta.suffix == ".meta")
                 for meta, pathname, asset in metadata:
                     value = guid(meta)
                     write_tar_file(archive, value + "/pathname", pathname.encode("utf-8"))
@@ -156,11 +156,11 @@ def verify_archives(output: Path, files: list[Path], manifest: dict) -> None:
             if not name.endswith("/pathname"):
                 continue
             pathname = archive.extractfile(members[name]).read().decode("utf-8")
-            if pathname != "Assets/SheetBoard" and not pathname.startswith("Assets/SheetBoard/"):
-                raise SystemExit(f"UnityPackage path is outside Assets/SheetBoard: {pathname}")
+            if pathname != "Assets/Utsushi" and not pathname.startswith("Assets/Utsushi/"):
+                raise SystemExit(f"UnityPackage path is outside Assets/Utsushi: {pathname}")
             asset_name = name.rsplit("/", 1)[0] + "/asset"
             if asset_name in members:
-                source = PACKAGE / pathname.removeprefix("Assets/SheetBoard/")
+                source = PACKAGE / pathname.removeprefix("Assets/Utsushi/")
                 if archive.extractfile(members[asset_name]).read() != source.read_bytes():
                     raise SystemExit(f"UnityPackage file content differs from package: {pathname}")
                 count += 1
