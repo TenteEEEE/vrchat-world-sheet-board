@@ -459,7 +459,7 @@ namespace UtsushiDev
                 if (!test.ApplyJson(large)) throw new InvalidOperationException("Large table fixture rejected.");
                 display.RenderNow();
                 PrivateInvoke(display, "RefreshIndicators", 0, false);
-                if (!display.statusText.text.Contains("表が大きく文字が小さくなっています") || display.statusDot.color != display.staleColor) throw new InvalidOperationException("Large table warning failed.");
+                if (display.statusText.text.Contains("表が大きく") || display.statusDot.color != display.normalColor) throw new InvalidOperationException("Large table must not add a size warning: " + display.statusText.text);
                 float[] heights = (float[])PrivateValue(display, "workHs");
                 for (int i = 0; i < heights.Length; i++) if (heights[i] < 1f) throw new InvalidOperationException("Zero-height row.");
                 string chip = "{\"format\":\"sheetboard/1\",\"rev\":\"chip\",\"updatedUnix\":3,\"ranges\":{\"chip\":{\"cols\":[1,1,1],\"rows\":[[\"A very long sentence that must not cross into the dropdown\",\"\",\"\"]],\"chip\":[[\"\",\"a\",\"\"]]}}}";

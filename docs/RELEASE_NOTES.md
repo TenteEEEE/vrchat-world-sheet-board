@@ -1,10 +1,8 @@
-<!-- version: 0.6.1 -->
-「掲示板をシーンに置く」で置かれる掲示板の位置を変えました。ワールド原点の真上、高さ 1.3 m（身長 1.3 m 前後のアバターの目線）に固定の向きで置きます。2枚目以降は横に並べて置きます。
-
-データ元の閲覧権限の選択肢を PermissionController の言葉に合わせ、「全員／管理者と協力者／管理者のみ」にしました（設定値はそのままです）。
+<!-- version: 0.6.2 -->
+表の大きさについての注意を表示しないようにしました。掲示板の状態表示に付いていた「表が大きく文字が小さくなっています」と、シートの「範囲が大きいため…」の注意がなくなります。
 
 ### インストール
 
-VCC の一覧 [TenteEEEE VPM Repository](https://tenteeeee.github.io/vpm-repos/) から **Utsushi 0.6.1** を追加してください。手動で導入する場合は、添付の `.unitypackage` を使えます。
+VCC の一覧 [TenteEEEE VPM Repository](https://tenteeeee.github.io/vpm-repos/) から **Utsushi 0.6.2** を追加してください。手動で導入する場合は、添付の `.unitypackage` を使えます。
 
 詳しい手順は [日本語 README](https://github.com/TenteEEEE/vrchat-world-utsushi/blob/main/README.ja.md) を参照してください。

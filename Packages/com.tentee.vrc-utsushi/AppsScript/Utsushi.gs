@@ -1,5 +1,5 @@
-// Utsushi 0.6.1
-const UTSUSHI_VERSION = '0.6.1';
+// Utsushi 0.6.2
+const UTSUSHI_VERSION = '0.6.2';
 /**
  * Utsushi: シートの表をワールドに公開するためのスクリプトです。
  * シートを開き直し、メニューの「セットアップ・修復」から始めてください。
@@ -14,7 +14,6 @@ const PROPERTY_VALUE_MAX_BYTES = 8000;
 const EXECUTION_BUDGET_MS = 270000;
 const GIST_RAW_MAX_BYTES = 10 * 1024 * 1024;
 const IOS_TRUNCATION_WARN_BYTES = 800 * 1024;
-const LARGE_RANGE_CELLS = 5000;
 
 function nowMillis_() { return Date.now(); }
 
@@ -1179,11 +1178,6 @@ function readRanges_(startedAt) {
         align: row[6],
         extra: extra
       });
-      if (keepRows.filter(Boolean).length * keepCols.filter(Boolean).length > LARGE_RANGE_CELLS) {
-        const notice = '⚠ 範囲が大きいため、公開に時間がかかり、掲示板の文字がとても小さくなります';
-        warnings.push('「' + name + '」: ' + notice);
-        rowWarnings.push(notice);
-      }
       ranges[name] = result.payload;
       result.warnings.forEach(warning => {
         warnings.push('「' + name + '」: ' + warning);

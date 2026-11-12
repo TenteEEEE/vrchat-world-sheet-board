@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2] - 2026-11-12
+
+### Removed
+
+- Remove the board status suffix shown for large tables (・表が大きく文字が小さくなっています / · table is too large to read comfortably).
+- Remove the spreadsheet notice for ranges over 5,000 cells.
+
 ## [0.6.1] - 2026-11-12
 
 ### Changed

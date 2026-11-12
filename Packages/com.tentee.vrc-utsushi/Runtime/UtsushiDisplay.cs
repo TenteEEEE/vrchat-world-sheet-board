@@ -14,7 +14,6 @@ namespace Utsushi
         private const string EnglishRangeMissingText = "Range \"{name}\" was not found";
         private const string JapaneseSourceMissingText = "データ元が設定されていません";
         private const string EnglishSourceMissingText = "No data source is set";
-        private const float MinReadableRowHeight = 12f;
         private const string JapaneseRefreshIdleText = "更新";
         private const string EnglishRefreshIdleText = "Refresh";
 
@@ -124,7 +123,6 @@ namespace Utsushi
         private UtsushiLanguage resolvedLanguage = UtsushiLanguage.English;
         private bool languageResolved;
         private bool rangeMissingShown;
-        private bool tableTooLarge;
 
         private void ResolveLanguage()
         {
@@ -252,10 +250,9 @@ namespace Utsushi
                 string message = source.GetStatusText();
                 Color color = level == 0 ? normalColor : (level == 1 ? staleColor : (level == 3 ? busyColor : errorColor));
                 if (rangeMissingShown && level != 2 && level != 3) { message = GetMissingRangeMessage(); color = errorColor; }
-                if (tableTooLarge) { message += resolvedLanguage == UtsushiLanguage.Japanese ? "・表が大きく文字が小さくなっています" : " · table is too large to read comfortably"; if (level != 2 && !rangeMissingShown) color = staleColor; }
                 SetStatus(message, color);
             }
-            if (busy && !tableTooLarge && !rangeMissingShown)
+            if (busy && !rangeMissingShown)
             {
                 busyLampOn = !busyLampOn;
                 Color color = busyColor;
@@ -619,7 +616,6 @@ namespace Utsushi
         public void RenderNow()
         {
             rangeMissingShown = false;
-            tableTooLarge = false;
             displayedSource = null; displayedRevision = -1;
             workRows = 0; workCols = 0;
             InitColors();
@@ -795,7 +791,6 @@ namespace Utsushi
             for (int r = 0; r < workRows; r++)
             {
                 float exact = workHs[r] * scale;
-                if (exact < MinReadableRowHeight) tableTooLarge = true;
                 workYs[r] = r == 0 ? 0f : Mathf.Max(Mathf.Round(cumulative), workYs[r - 1] + workHs[r - 1]);
                 cumulative += exact;
                 workHs[r] = Mathf.Max(1f, Mathf.Round(cumulative) - workYs[r]);

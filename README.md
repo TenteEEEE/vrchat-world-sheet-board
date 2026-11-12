@@ -100,7 +100,7 @@ In-world Source and Display messages can use Japanese or English. Auto follows e
 
 In-world status examples: `Updated 21:05 (just now)`, `Updated 21:05 (2 h ago) · may be out of date`, `Updated 21:05 (3 min ago) · retrying`, `Loading…`, `Come closer to load`, and `Couldn't load · retrying in 10s (timed out)`. Errors can also say `invalid data` or `HTTP 404`.
 
-Other messages include `No range has been published yet`, `No data source is set`, `You don't have permission to view this`, `Checking permission…`, and `· table is too large to read comfortably`.
+Other messages include `No range has been published yet`, `No data source is set`, `You don't have permission to view this`, and `Checking permission…`.
 
 ## VRChat String Loading
 

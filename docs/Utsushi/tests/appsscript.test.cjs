@@ -53,7 +53,7 @@ test('S2 setup guidance, copy fallback, version and fixed Gist description', () 
   assert.match(h.context.clientHelpers_(), /execCommand\("copy"\)/);
   assert.match(h.context.clientHelpers_(), /Ctrl\+C/);
   h.context.showStatus();
-  assert.match(h.dialogs.at(-1)[1], /スクリプトの版: 0\.6\.1/);
+  assert.match(h.dialogs.at(-1)[1], /スクリプトの版: 0\.6\.2/);
   const owner = harness();
   owner.context.createGist_('{}', 'test-token');
   assert.equal(JSON.parse(owner.requests[0].payload).description, 'Utsushi');
@@ -287,12 +287,13 @@ test('readRanges_ publishes 25 configured ranges', () => {
   assert.equal(Object.keys(plain(h.context.readRanges_().ranges)).length, 25);
 });
 
-test('readRanges_ warns on a large visible range without rejecting it', () => {
+test('readRanges_ accepts a large visible range without a size warning', () => {
   const h = harness();
   configureReadableSheet(h, [['large', 'Source!A1:BS71']], {rows: 71, cols: 71});
   const result = h.context.readRanges_();
   assert.equal(result.ranges.large.rows.length, 71);
-  assert.match(result.rowStatus[0], /範囲が大きいため、公開に時間がかかり、掲示板の文字がとても小さくなります/);
+  assert.equal(result.rowStatus[0], '✔ 掲示板に表示されます');
+  assert.deepEqual(plain(result.warnings), []);
 });
 
 test('readRanges_ keeps only the 40 visible rows in a 300-row filtered range', () => {
