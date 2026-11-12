@@ -7,7 +7,7 @@
     "name": "TenteEEEE",
     "url": "https://github.com/TenteEEEE"
   },
-  "description": "Utsushi mirrors a Google Sheets range onto boards in a VRChat world and updates them without re-uploading the world (Apps Script -> GitHub Gist -> String Loading). Formerly \"Sheet Board\".",
+  "description": "Utsushi mirrors a Google Sheets range onto boards in a VRChat world and updates them without re-uploading the world (Apps Script -> GitHub Gist -> String Loading).",
   "license": "MIT",
   "url": "https://github.com/TenteEEEE/vrchat-world-utsushi/releases/download/0.6.0/com.tentee.vrc-utsushi-0.6.0.zip",
   "documentationUrl": "https://github.com/TenteEEEE/vrchat-world-utsushi/blob/main/README.ja.md",

@@ -319,7 +319,7 @@ namespace Utsushi
             DataToken orderToken;
             if (string.IsNullOrEmpty(json) || !VRCJson.TryDeserializeFromJson(json, out root) || root.TokenType != TokenType.DataDictionary) return InvalidJson();
             DataDictionary data = root.DataDictionary;
-            if (!data.TryGetValue("format", out format) || format.TokenType != TokenType.String || format.String != "sheetboard/1") // Old name retained: value written by Apps Script.
+            if (!data.TryGetValue("format", out format) || format.TokenType != TokenType.String || format.String != "sheetboard/1") // Must match the value written by Apps Script.
                 return InvalidJson();
             if (!data.TryGetValue("rev", out rev) || rev.TokenType != TokenType.String) return InvalidJson();
             if (!data.TryGetValue("updatedUnix", out updated) || !IsNumber(updated)) return InvalidJson();

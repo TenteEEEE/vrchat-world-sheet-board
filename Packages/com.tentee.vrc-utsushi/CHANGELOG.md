@@ -4,10 +4,7 @@
 
 ### Changed
 
-- Rename Sheet Board to Utsushi. The package ID is now `com.tentee.vrc-utsushi`, and the repository is `TenteEEEE/vrchat-world-utsushi`.
-- Migrate automatically from the old package through `legacyPackages`. The script GUID is unchanged, so boards in existing scenes continue to work.
-- Keep the board URL filename (`sheetboard.json`) and data format (`sheetboard/1`) under their old names for compatibility.
-- Rename the spreadsheet settings tab automatically to `Utsushi設定`; the old `SheetBoard設定` tab is also recognized.
+- Publish the package as `com.tentee.vrc-utsushi` from `TenteEEEE/vrchat-world-utsushi`.
 
 All notable changes to this package are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the package uses [Semantic Versioning](https://semver.org/).
 

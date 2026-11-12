@@ -19,22 +19,6 @@ test('S2 settings sheet ID restores a renamed tab', () => {
   assert.equal(name, 'Utsushi設定');
 });
 
-test('legacy settings tab is renamed and reused without creating a new tab', () => {
-  const h = harness();
-  let name = 'SheetBoard設定', inserted = 0;
-  const sheet = {getSheetId: () => 42, getName: () => name, setName: value => {name = value;}};
-  const ss = {
-    getSheetByName: value => value === name ? sheet : null,
-    getSheets: () => [sheet],
-    insertSheet: () => {inserted++; throw new Error('should reuse legacy settings tab');}
-  };
-  h.context.SpreadsheetApp.getActiveSpreadsheet = () => ss;
-  h.context.__ensureSettingsSheet_();
-  assert.equal(name, 'Utsushi設定');
-  assert.equal(inserted, 0);
-  assert.equal(h.shared.getProperty('settingsSheetId'), '42');
-});
-
 test('S2 empty publication requires confirmation and trigger failure preserves Gist', () => {
   const h = harness({doc: {gistId: 'g', gistOwner: 'admin', publishedNameCount: '1'}});
   h.context.readRanges_ = () => ({ranges: {}, warnings: [], rowStatus: []});

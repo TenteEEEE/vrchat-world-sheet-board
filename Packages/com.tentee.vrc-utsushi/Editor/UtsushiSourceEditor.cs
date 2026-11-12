@@ -404,7 +404,7 @@ namespace UtsushiEditor
         {
             ranges = Array.Empty<string>();
             if (!VRCJson.TryDeserializeFromJson(json, out DataToken root) || root.TokenType != TokenType.DataDictionary ||
-                !root.DataDictionary.TryGetValue("format", out DataToken format) || format.TokenType != TokenType.String || format.String != "sheetboard/1" || // Old name retained: value written by Apps Script.
+                !root.DataDictionary.TryGetValue("format", out DataToken format) || format.TokenType != TokenType.String || format.String != "sheetboard/1" || // Must match the value written by Apps Script.
                 !root.DataDictionary.TryGetValue("ranges", out DataToken data) || data.TokenType != TokenType.DataDictionary) return false;
             DataList keys = data.DataDictionary.GetKeys();
             List<string> names = new List<string>();

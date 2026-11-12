@@ -1,7 +1,5 @@
 # Development and releases
 
-This repository was renamed from `vrchat-world-sheet-board` (package `com.tentee.vrc-sheet-board`, versions 0.1.0 to 0.5.0).
-
 The distributable package is `Packages/com.tentee.vrc-utsushi`. Samples, preview code and regression checks are in `Assets/UtsushiDev` and are excluded from both release archives. The normative specification is `Packages/com.tentee.vrc-utsushi/docs/SPEC.md`.
 
 Open the project with Unity 2022.3.22f1 after restoring VRChat Worlds SDK 3.10.5 through VCC and importing TMP Essential Resources. The dependency packages and TMP Essential Resources are not committed here.

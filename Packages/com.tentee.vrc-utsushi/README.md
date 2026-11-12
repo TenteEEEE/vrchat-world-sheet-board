@@ -1,7 +1,5 @@
 # Utsushi
 
-Formerly "Sheet Board" (renamed in 0.6.0; same features).
-
 Show a Google Sheets range on boards in a VRChat world, and update it **without re-uploading the world**. Built for event teams: staff edit the team's spreadsheet, and the boards in the world follow within a few minutes.
 
 - Keeps the sheet's look: background and text colours, bold/italic/underline/strikethrough, merged cells, column widths, row heights, alignment.
@@ -84,15 +82,9 @@ In-world Source and Display messages can use Japanese or English. Auto follows e
 
 ## Upgrading from 0.x
 
-### Migrating from Sheet Board
-
-When you add Utsushi in VCC, the old package (`com.tentee.vrc-sheet-board`) is removed automatically. Boards and data sources already in your scene keep working because the script contents are unchanged. If you installed with a unitypackage, delete `Assets/SheetBoard` before installing Utsushi.
-
-The spreadsheet script keeps working without being pasted again. If you paste it again, the menu is named “Utsushi” and the settings tab is automatically renamed to “Utsushi設定”. The board URL does not change.
-
 - The Display fields `maxRows`, `maxCols`, and `maxOverlays` were removed. `maxChips` was removed in 0.3.1, and `refreshBusyText` was removed in 0.2.1.
 - Source and Display text fields now override the Japanese and English defaults. Leave a field empty, or set it to its old Japanese default, to use the default for the selected display language.
-- When moving from a `.unitypackage` install to VPM, the old `Assets/Utsushi` folder is cleaned up. Do not install the package by both methods.
+- When moving from a `.unitypackage` install to VPM, the old `.unitypackage` folder is cleaned up through `legacyFolders`. Do not install the package by both methods.
 
 - Updating the Unity package does not update the script in the spreadsheet. The old menu remains until the new `Utsushi.gs` is pasted into it.
 - Old → new names: **はじめにセットアップ** → **セットアップ・修復**; **Install Sample into Current Scene** → **掲示板をシーンに置く**; **URL を適用** was removed because the board URL is applied automatically.

@@ -5,9 +5,8 @@ const UTSUSHI_VERSION = '0.6.0';
  * シートを開き直し、メニューの「セットアップ・修復」から始めてください。
  */
 const GITHUB_CLIENT_ID = 'Ov23liVU3bFAK2lWtKPk'; // Utsushi OAuth App（Device Flow）の公開クライアントIDです。秘密情報ではありません。フォークでは独自のIDに置き換えられます。空にするとトークン貼り付け方式になります。
-const GIST_FILENAME = 'sheetboard.json'; // 配布済みワールドの掲示板URLに含まれるため旧名のまま
+const GIST_FILENAME = 'sheetboard.json'; // 配布済みワールドの掲示板URLに含まれるため変更しない
 const SETTINGS_SHEET = 'Utsushi設定';
-const LEGACY_SETTINGS_SHEET = 'SheetBoard設定';
 const HEARTBEAT_MINUTES = 60;
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 const MAX_STATUS_ITEM_CHARS = 120;
@@ -363,9 +362,8 @@ function findSettingsSheet_() {
   const props = PropertiesService.getDocumentProperties();
   let sheet = ss.getSheetByName(SETTINGS_SHEET);
   if (!sheet) {
-    sheet = ss.getSheetByName(LEGACY_SETTINGS_SHEET);
     const id = props.getProperty('settingsSheetId');
-    if (!sheet && id) sheet = ss.getSheets().find(s => String(s.getSheetId()) === id);
+    if (id) sheet = ss.getSheets().find(s => String(s.getSheetId()) === id);
     if (sheet) sheet.setName(SETTINGS_SHEET);
   }
   if (sheet) props.setProperty('settingsSheetId', String(sheet.getSheetId()));
@@ -423,7 +421,7 @@ function recordSetupSelection_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const active = ss.getActiveSheet();
   const selected = ss.getActiveRange();
-  if (active && active.getName() !== SETTINGS_SHEET && active.getName() !== LEGACY_SETTINGS_SHEET && selected &&
+  if (active && active.getName() !== SETTINGS_SHEET && selected &&
       (selected.getNumRows() > 1 || selected.getNumColumns() > 1)) {
     user.setProperty('setupSelection', active.getName() + '!' + selected.getA1Notation());
   } else {
@@ -861,7 +859,7 @@ function removeTriggers_() {
 // thrown error would add Google's own failure mail for every run on top of that.
 function onEditInstalled(e) {
   if (!triggerAllowed_()) return;
-  if (e && e.range && e.range.getSheet && [SETTINGS_SHEET, LEGACY_SETTINGS_SHEET].includes(e.range.getSheet().getName()) && e.range.getColumn() >= 8) return;
+  if (e && e.range && e.range.getSheet && e.range.getSheet().getName() === SETTINGS_SHEET && e.range.getColumn() >= 8) return;
   const last = Number(PropertiesService.getDocumentProperties().getProperty('lastTriggerMillis') || 0);
   if (Date.now() - last < 5000) { setPending_(); return; }
   try { publish_(false, true); } catch (e) {}
@@ -915,7 +913,7 @@ function addSelectionToBoard() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const selected = ss.getActiveRange();
   const active = ss.getActiveSheet();
-  if (!selected || (active && [SETTINGS_SHEET, LEGACY_SETTINGS_SHEET].includes(active.getName())) ||
+  if (!selected || (active && active.getName() === SETTINGS_SHEET) ||
       (selected.getNumRows() === 1 && selected.getNumColumns() === 1)) {
     showMessage_('掲示板に追加', '掲示板に出したい表のタブを開き、表全体をドラッグで選択してから、メニュー「Utsushi → 選択範囲を掲示板に追加」をもう一度実行してください。');
     return;
@@ -1033,7 +1031,7 @@ function readRanges_(startedAt) {
     try {
       const ref = parseRangeRef(row[1]);
       if (!ref || !ref.a1) throw new Error('範囲に文字が入っていません');
-      const sheet = ref.sheet ? ss.getSheetByName(ref.sheet) : ss.getSheets().find(s => ![SETTINGS_SHEET, LEGACY_SETTINGS_SHEET].includes(s.getName()));
+      const sheet = ref.sheet ? ss.getSheetByName(ref.sheet) : ss.getSheets().find(s => s.getName() !== SETTINGS_SHEET);
       if (!sheet) throw new Error('シート「' + ref.sheet + '」が見つかりません。タブ名を確認してください');
       let range;
       try { range = sheet.getRange(ref.a1); }
@@ -1305,7 +1303,7 @@ function publish_(force, trigger, recreate, emptyPolicy) {
     const offsetText = Utilities.formatDate(updatedDate, sheetTimeZone_(), 'Z');
     const offset = (offsetText[0] === '-' ? -1 : 1) * (Number(offsetText.slice(1, 3)) * 60 + Number(offsetText.slice(3, 5)));
     const content = JSON.stringify({
-      format: 'sheetboard/1', // 旧名のまま（ワールド側が照合する）
+      format: 'sheetboard/1', // ワールド側が照合する
       rev: rev,
       updated: isoWithOffset(updatedDate, offset),
       updatedUnix: updatedUnix,
