@@ -165,7 +165,7 @@ namespace UtsushiEditor
                 }
                 DrawControllerCandidates(candidateCount);
                 SerializedProperty audienceProperty = serializedObject.FindProperty("audience");
-                string[] labels = { "全員", "ワールドスタッフ以上", "ワールド管理者のみ" };
+                string[] labels = { "全員", "管理者と協力者", "管理者のみ" };
                 using (new EditorGUI.DisabledScope(!valid))
                 {
                     EditorGUI.showMixedValue = audienceProperty.hasMultipleDifferentValues;
@@ -272,8 +272,8 @@ namespace UtsushiEditor
         {
             switch (audience)
             {
-                case UtsushiAudience.Staff: return "ワールドスタッフ以上";
-                case UtsushiAudience.Admin: return "ワールド管理者のみ";
+                case UtsushiAudience.Staff: return "管理者と協力者";
+                case UtsushiAudience.Admin: return "管理者のみ";
                 default: return "全員";
             }
         }

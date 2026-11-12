@@ -311,6 +311,8 @@ namespace UtsushiDev
             UtsushiInstaller.InstallSampleMenu();
             UtsushiDisplay installed = UnityEngine.Object.FindFirstObjectByType<UtsushiDisplay>();
             if (installed == null) throw new InvalidOperationException("Install Sample did not create a display.");
+            if (Mathf.Abs(installed.transform.position.y - 1.3f) > 0.0001f || Quaternion.Angle(installed.transform.rotation, Quaternion.identity) > 0.01f)
+                throw new InvalidOperationException("Install Sample placed the board at " + installed.transform.position + " / " + installed.transform.eulerAngles + "; expected y=1.3 and no rotation.");
             var installedUdon = UdonSharpEditorUtility.GetBackingUdonBehaviour(installed);
             if (installedUdon == null || !(UdonValue(installedUdon, "source") is UnityEngine.Object source) || source == null)
                 throw new InvalidOperationException("Install Sample did not wire the Udon source.");

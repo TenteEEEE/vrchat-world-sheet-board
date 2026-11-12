@@ -61,7 +61,7 @@ private const float StaleMinutes = 90f;       // 生存通知がこの時間途�
 private const float ManualCooldown = 5f;      // 手動更新のクールダウン（秒、既定 5）
 private const float StartDelayMax = 3f;       // 初回取得をランダムに遅らせる上限（秒）
 // 状態行の文言（§3.6）
-public UtsushiAudience audience = UtsushiAudience.Public; // 全員 / ワールドスタッフ以上 / ワールド管理者のみ
+public UtsushiAudience audience = UtsushiAudience.Public; // 全員 / 管理者と協力者 / 管理者のみ
 public UtsushiLanguage language = UtsushiLanguage.Auto; // Auto / Japanese / English
 public UdonBehaviour permissionController; // 制限付き閲覧で使う PermissionController
 // 以下の文言フィールドは空欄が既定。§3.6 の表示言語別文言で補う
@@ -560,7 +560,7 @@ V8、`Asia/Tokyo`、スコープは `spreadsheets.currentonly`、`script.externa
 
 ### 7.1 パッケージに含めるメニュー（`Tools/TenteEEEE/Utsushi/`）
 
-- `掲示板をシーンに置く`: データ元 1 つと掲示板 1 つを配置して配線する。既にデータ元があれば掲示板だけ追加し、既存の掲示板と重ならないよう X 方向にずらし、選択状態にしてログを出す。シーンビューがあれば pivot に置き、シーンビューから板が見える向きにする。TMP Essentials が無ければ「インポートする／キャンセル」を表示し、インポート後はもう一度メニューを実行するよう案内する。prefab が無ければダイアログで中止する（自動ビルドしない）。
+- `掲示板をシーンに置く`: データ元 1 つと掲示板 1 つを配置して配線する。既にデータ元があれば掲示板だけ追加し、既存の掲示板と重ならないよう X 方向にずらし、選択状態にしてログを出す。板の中心の高さはワールド原点から 1.3 m（身長 1.3 m 前後のアバターの目線）、向きは固定（回転なし、-Z 側から読める）。水平位置はシーンビューがあればその pivot の X・Z、無ければ原点。TMP Essentials が無ければ「インポートする／キャンセル」を表示し、インポート後はもう一度メニューを実行するよう案内する。prefab が無ければダイアログで中止する（自動ビルドしない）。
 - メニューは再生中は無効にする（validator）。
 - 同梱の prefab・マテリアル・フォント・program asset はビルド済みで、利用者は Build を実行しない。
 
@@ -630,13 +630,13 @@ Display に `language` フィールドはなく、ワールド内の見出し・
 
 Apps Script は 1 スプレッドシートにつき 1 つの URL を公開し、閲覧権限は各 Source で設定する。PermissionController はワールド内の取得・表示を制御し、GitHub 上のアクセス権は変更しない。
 
-| Source の閲覧権限 | 一般（Visitor） | ワールドスタッフ（Collab） | ワールド管理者（Auth） |
+| Source の閲覧権限 | 一般（Visitor） | 協力者（Collab） | 管理者（Auth） |
 | --- | --- | --- | --- |
 | 全員 | 取得・表示 | 取得・表示 | 取得・表示 |
-| ワールドスタッフ以上 | 取得しない・表示しない | 取得・表示 | 取得・表示 |
-| ワールド管理者のみ | 取得しない・表示しない | 取得しない・表示しない | 取得・表示 |
+| 管理者と協力者 | 取得しない・表示しない | 取得・表示 | 取得・表示 |
+| 管理者のみ | 取得しない・表示しない | 取得しない・表示しない | 取得・表示 |
 
-- 閲覧権限は「閲覧に必要な最小権限」とする。ワールド管理者にはすべて、ワールドスタッフには全員とワールドスタッフ以上、一般には全員だけを認める。
+- 閲覧権限は「閲覧に必要な最小権限」とする。管理者にはすべて、協力者には「全員」と「管理者と協力者」、一般には「全員」だけを認める。
 - PermissionController が無いプロジェクトでも、従来の全員向け掲示板を単体で利用できる。制限付きの Source は連携先が無い場合に取得・表示せず、全員公開へ自動で切り替えない。
 - 本節では各端末が自分に許可された公開先を取得する。§2.2 のネットワーク同期を使わない構成を維持し、権限者から他プレイヤーへ本文を中継する機能は含めない。
 
@@ -653,7 +653,7 @@ Apps Script は 1 スプレッドシートにつき 1 つの URL を公開し、
 - 「接続を確認」はデータ形式を検査し、Source のローカル閲覧権限や設定タブとの一致は要求しない。エディターでの接続確認は作者の端末で行う操作であり、ワールド内の閲覧権限制御の対象ではない。
 - PermissionController のソース・prefab を変更・再配布せず、その C# 型やアセンブリを Utsushi の必須依存にしない。Force Respawn パッケージも必須依存にしない。
 - 実行時はローカルプレイヤーの PlayerObject 群から、`Controller` が設定された連携先と一致する UdonBehaviour を探し、`CurrentPermission` を読む。候補の変数が存在するかは `GetProgramVariableType` で先に確認し、無関係な behaviour の変数参照エラーを出さない。探索結果をキャッシュし、未生成・破棄時は再探索する。
-- PermissionController の権限値は `Auth = 0`、`Collab = 1`、`Visitor = 2`。値を明示的に対応付け、不明値をワールド管理者として扱わない。PlayerObject 未生成・権限の初期化や復元待ち・参照切れの間は、制限付きの取得・表示を許可しない。
+- PermissionController の権限値は `Auth = 0`、`Collab = 1`、`Visitor = 2`。値を明示的に対応付け、不明値を管理者として扱わない。PlayerObject 未生成・権限の初期化や復元待ち・参照切れの間は、制限付きの取得・表示を許可しない。
 - エディターでの型検出・対応版の検査と、実行時の変数参照方式の参考実装: [PermissionController Force Respawn](https://github.com/TenteEEEE/vrchat-world-permission-controller-force-respawn)。特に `Runtime/ForceRespawnPanel.cs` の `FindPermissionSource` / `ReadPermission` と、`Editor/ForceRespawnPanelEditor.cs` / `ForceRespawnBuildCheck.cs` を参照する。
 
 ### 10.4 取得と表示への適用
@@ -687,7 +687,7 @@ Apps Script は 1 スプレッドシートにつき 1 つの URL を公開し、
 2. 3 権限 × 3 Source 閲覧権限の全組合せが §10.1 の表と一致し、制限付き Source は閲覧権限がない端末で取得しない。
 3. Apps Script は単一 JSON / URL を公開し、最後の範囲の削除と公開失敗後の再試行を確認する。
 4. 途中参加と PlayerObject の生成・権限復元待ちに制限付きの取得が始まらず、解決後は正しく取得する。未知の権限値や異なる Controller の PlayerObject では許可しない。
-5. ワールド管理者→ワールドスタッフ→一般、および逆方向の変更で、取得可否と表示が追従する。権限剥奪時は保持データ・タイトル・プール内の文字列が消える。
+5. 管理者→協力者→一般、および逆方向の変更で、取得可否と表示が追従する。権限剥奪時は保持データ・タイトル・プール内の文字列が消える。
 6. 取得中の剥奪、応答到着前の再付与、無効化・再有効化、タイムアウト後の遅い応答でも旧内容を復活させない。
 7. 閲覧権限がない状態や Controller の未設定・不明状態では、手動更新からも取得できない。
 8. 全員向けと制限付きの掲示板を同時に使い、一般端末と権限者端末それぞれの表示・実際のダウンロード・ログを確認する。Unity のプレビューだけで URL の非露出を検証済みとしない。

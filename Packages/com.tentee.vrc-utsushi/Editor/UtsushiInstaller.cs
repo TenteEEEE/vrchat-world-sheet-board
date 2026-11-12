@@ -152,6 +152,9 @@ namespace UtsushiEditor
             return path;
         }
 
+        // Board center height from the world origin, at eye level for a 1.3 m avatar. Rotation is fixed (faces -Z).
+        private const float BoardHeight = 1.3f;
+
         [MenuItem("Tools/TenteEEEE/Utsushi/掲示板をシーンに置く")]
         public static void InstallSampleMenu()
         {
@@ -183,8 +186,8 @@ namespace UtsushiEditor
             SceneView sceneView = SceneView.lastActiveSceneView;
             if (sceneView != null)
             {
-                board.transform.position = sceneView.pivot;
-                board.transform.rotation = Quaternion.Euler(0f, sceneView.camera.transform.eulerAngles.y, 0f);
+                board.transform.position = new Vector3(sceneView.pivot.x, BoardHeight, sceneView.pivot.z);
+                board.transform.rotation = Quaternion.identity;
                 Canvas canvas = board.GetComponentInChildren<Canvas>(true);
                 float width = canvas == null ? 1.6f : ((RectTransform)canvas.transform).rect.width * Mathf.Abs(canvas.transform.lossyScale.x);
                 UtsushiDisplay[] existingBoards = Object.FindObjectsByType<UtsushiDisplay>(FindObjectsInactive.Include, FindObjectsSortMode.None);
@@ -205,7 +208,7 @@ namespace UtsushiEditor
                 foreach (UtsushiDisplay existing in Object.FindObjectsByType<UtsushiDisplay>(FindObjectsInactive.Include, FindObjectsSortMode.None))
                     if (existing != null && existing.gameObject != board && existing.gameObject.scene == scene)
                         x = Mathf.Max(x, existing.transform.position.x + 2f);
-                board.transform.position = new Vector3(x, 1.5f, 0);
+                board.transform.position = new Vector3(x, BoardHeight, 0);
             }
             UtsushiDisplay display = board.GetComponent<UtsushiDisplay>();
             RecordProxyUndo(display, "Configure Utsushi Display");

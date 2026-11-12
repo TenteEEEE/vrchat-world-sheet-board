@@ -139,7 +139,7 @@ Utsushi は、スプレッドシートに紐づいた Apps Script として動�
 
 ### 3-2. 掲示板を置く
 
-**Tools → TenteEEEE → Utsushi → 掲示板をシーンに置く** を選びます。シーンビューで見ている場所に、掲示板（`Utsushi Display`）とデータ元（`Utsushi Source`）が置かれます。
+**Tools → TenteEEEE → Utsushi → 掲示板をシーンに置く** を選びます。シーンビューで見ている場所（高さはワールド原点から 1.3 m、向きは固定）に、掲示板（`Utsushi Display`）とデータ元（`Utsushi Source`）が置かれます。
 
 prefab などはビルド済みで同梱されています。ほかの準備は不要です。
 
@@ -262,7 +262,7 @@ Unity の再生（Play）でも実際の公開データを読み込みます。�
 
 ### 6-4. 閲覧を制限する
 
-データ元の Inspector で **ワールド内の閲覧権限** を設定します。選択肢は「全員／ワールドスタッフ以上／ワールド管理者のみ」です。既定の「全員」なら PermissionController は不要です。閲覧を制限する場合は先に対応する PermissionController を指定します。PermissionController が無い制限付きデータ元は取得できず、ワールドのビルドも通りません。
+データ元の Inspector で **ワールド内の閲覧権限** を設定します。選択肢は「全員／管理者と協力者／管理者のみ」です（管理者・協力者は PermissionController の権限です）。既定の「全員」なら PermissionController は不要です。閲覧を制限する場合は先に対応する PermissionController を指定します。PermissionController が無い制限付きデータ元は取得できず、ワールドのビルドも通りません。
 
 ### 6-5. 表示言語
 

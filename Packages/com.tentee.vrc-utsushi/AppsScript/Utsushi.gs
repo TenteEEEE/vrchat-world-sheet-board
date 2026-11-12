@@ -1,5 +1,5 @@
-// Utsushi 0.6.0
-const UTSUSHI_VERSION = '0.6.0';
+// Utsushi 0.6.1
+const UTSUSHI_VERSION = '0.6.1';
 /**
  * Utsushi: シートの表をワールドに公開するためのスクリプトです。
  * シートを開き直し、メニューの「セットアップ・修復」から始めてください。

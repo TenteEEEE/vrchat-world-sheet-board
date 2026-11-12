@@ -53,7 +53,7 @@ test('S2 setup guidance, copy fallback, version and fixed Gist description', () 
   assert.match(h.context.clientHelpers_(), /execCommand\("copy"\)/);
   assert.match(h.context.clientHelpers_(), /Ctrl\+C/);
   h.context.showStatus();
-  assert.match(h.dialogs.at(-1)[1], /スクリプトの版: 0\.6\.0/);
+  assert.match(h.dialogs.at(-1)[1], /スクリプトの版: 0\.6\.1/);
   const owner = harness();
   owner.context.createGist_('{}', 'test-token');
   assert.equal(JSON.parse(owner.requests[0].payload).description, 'Utsushi');
